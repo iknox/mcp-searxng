@@ -251,6 +251,43 @@ function formatMetadataBlock(metadata: PageMetadata): string {
   return lines.length > 0 ? `---\n${lines.join("\n")}\n---\n\n` : "";
 }
 
+const MAX_CONTENT_LENGTH_BYTES = 5 * 1024 * 1024; // 5MB
+
+export async function checkContentLength(
+  url: string,
+  timeoutMs: number,
+  dispatcher: any,
+  mcpServer: McpServer,
+): Promise<number | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), Math.min(timeoutMs, 3000));
+
+  try {
+    const headOptions: RequestInit = {
+      method: "HEAD",
+      signal: controller.signal,
+    };
+    if (dispatcher) {
+      (headOptions as any).dispatcher = dispatcher;
+    }
+
+    const response = await (undiciFetch as unknown as typeof fetch)(url, headOptions);
+    const contentLength = response.headers.get("content-length");
+    if (contentLength) {
+      const bytes = parseInt(contentLength, 10);
+      if (!isNaN(bytes)) {
+        return bytes;
+      }
+    }
+    return null;
+  } catch (err: any) {
+    logMessage(mcpServer, "debug", `HEAD request failed for ${url} (proceeding with GET): ${err.message}`);
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 function applyPaginationOptions(markdownContent: string, options: PaginationOptions): string {
   let result = markdownContent;
 
@@ -341,6 +378,15 @@ export async function fetchAndConvertToMarkdown(
         ...requestOptions.headers,
         'User-Agent': userAgent
       };
+    }
+
+    // Check Content-Length via HEAD before fetching. Skips pages over
+    // MAX_CONTENT_LENGTH_BYTES (5MB) to avoid pulling huge files into context.
+    const contentLength = await checkContentLength(url, timeoutMs, dispatcher, mcpServer);
+    if (contentLength !== null && contentLength > MAX_CONTENT_LENGTH_BYTES) {
+      const sizeMB = (contentLength / (1024 * 1024)).toFixed(1);
+      logMessage(mcpServer, "warning", `Skipping ${url}: Content-Length ${sizeMB}MB exceeds ${MAX_CONTENT_LENGTH_BYTES / (1024 * 1024)}MB limit`);
+      return `Content too large: server reports Content-Length of ${sizeMB}MB (limit: ${MAX_CONTENT_LENGTH_BYTES / (1024 * 1024)}MB). Try using readHeadings or section to fetch only the relevant parts.`;
     }
 
     let response: Response;

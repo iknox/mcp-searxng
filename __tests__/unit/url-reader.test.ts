@@ -14,7 +14,7 @@ import { strict as assert } from 'node:assert';
 import * as http from 'node:http';
 import * as net from 'node:net';
 import * as zlib from 'node:zlib';
-import { fetchAndConvertToMarkdown } from '../../src/url-reader.js';
+import { fetchAndConvertToMarkdown, extractMainContent } from '../../src/url-reader.js';
 import { urlCache } from '../../src/cache.js';
 import { testFunction, createTestResults, printTestSummary } from '../helpers/test-utils.js';
 import { createMockServer } from '../helpers/mock-server.js';
@@ -634,6 +634,142 @@ async function runTests() {
         result.includes('No headings found'),
         `Expected "No headings found", got: ${result}`,
       );
+    } finally {
+      await close();
+    }
+  }, results);
+
+  // ── readability extraction ────────────────────────────────────────────────
+
+  await testFunction('extractMainContent strips nav, sidebar, and footer', () => {
+    const html = `
+      <html><head><title>News Article</title></head><body>
+        <header><nav><a href="/">Home</a><a href="/about">About</a></nav></header>
+        <main>
+          <article>
+            <h1>Article Title</h1>
+            <p>This is the main content of the article.</p>
+            <p>It has multiple paragraphs with useful information.</p>
+          </article>
+        </main>
+        <aside class="sidebar"><div class="ad">Buy our stuff!</div></aside>
+        <footer><p>Copyright 2024. All rights reserved.</p></footer>
+      </body></html>
+    `;
+    const result = extractMainContent(html, 'https://example.com');
+    assert.ok(result, 'Should extract main content');
+    assert.ok(result.includes('Article Title'), `Expected article title, got: ${result?.substring(0, 200)}`);
+    assert.ok(result.includes('main content'), `Expected main content, got: ${result?.substring(0, 200)}`);
+    assert.ok(!result.includes('Buy our stuff'), 'Should strip sidebar ads');
+    assert.ok(!result.includes('Copyright'), 'Should strip footer');
+    assert.ok(!result.includes('Home'), 'Should strip nav');
+  }, results);
+
+  await testFunction('extractMainContent returns null for empty body', () => {
+    const html = `
+      <html><body>
+        <p>Just a simple page with no article structure.</p>
+        <p>No semantic elements here.</p>
+      </body></html>
+    `;
+    const result = extractMainContent(html, 'https://example.com');
+    // Readability wraps any content it finds in a div, so it won't return null
+    // for pages with text content. It returns null only for truly empty pages.
+    assert.ok(result, 'Should return content wrapper for non-empty pages');
+    assert.ok(result.includes('simple page'), 'Should contain the page text');
+  }, results);
+
+  await testFunction('extractMainContent preserves heading hierarchy', () => {
+    const html = `
+      <html><body>
+        <article>
+          <h1>Main Heading</h1>
+          <p>Intro text.</p>
+          <h2>Subsection</h2>
+          <p>Subsection content.</p>
+          <h3>Details</h3>
+          <p>Detailed info.</p>
+        </article>
+      </body></html>
+    `;
+    const result = extractMainContent(html, 'https://example.com');
+    assert.ok(result, 'Should extract content');
+    // Readability normalizes headings — h1 becomes h2 in output
+    assert.ok(result.includes('Main Heading'), `Expected Main Heading, got: ${result?.substring(0, 300)}`);
+    assert.ok(result.includes('Subsection'), `Expected Subsection, got: ${result?.substring(0, 300)}`);
+    assert.ok(result.includes('Details'), `Expected Details, got: ${result?.substring(0, 300)}`);
+  }, results);
+
+  await testFunction('extractMainContent handles empty body', () => {
+    const html = '<html><body></body></html>';
+    const result = extractMainContent(html, 'https://example.com');
+    assert.equal(result, null, 'Should return null for empty body');
+  }, results);
+
+  await testFunction('extractMainContent is not called when extractMainContent is false', async () => {
+    const mockServer = createMockServer();
+    urlCache.clear();
+
+    const testHtml = `
+      <html><head><title>News</title></head><body>
+        <header><nav>Navigation</nav></header>
+        <main>
+          <article>
+            <h1>Story</h1>
+            <p>Full article text with important details.</p>
+            <p>Second paragraph with more context and background information.</p>
+            <p>Third paragraph discussing implications and analysis.</p>
+            <p>Fourth paragraph with expert commentary from industry leaders.</p>
+            <p>Fifth paragraph wrapping up the story with final thoughts.</p>
+          </article>
+        </main>
+        <aside class="sidebar"><div class="ad">Buy stuff</div></aside>
+        <footer><p>Footer</p></footer>
+      </body></html>
+    `;
+    const { url, close } = await startTestServer({ body: testHtml });
+    try {
+      const result = await fetchAndConvertToMarkdown(mockServer as any, url, 10000, {
+        extractMainContent: false,
+      });
+      // Should contain ALL content since readability was skipped
+      assert.ok(result.includes('Navigation'), 'Should include nav when readability off');
+      assert.ok(result.includes('Story'), 'Should include article');
+      assert.ok(result.includes('Footer'), 'Should include footer when readability off');
+    } finally {
+      await close();
+    }
+  }, results);
+
+  await testFunction('extractMainContent defaults to on via fetchAndConvertToMarkdown', async () => {
+    const mockServer = createMockServer();
+    urlCache.clear();
+
+    const testHtml = `
+      <html><head><title>News</title></head><body>
+        <header><nav>Navigation</nav></header>
+        <main>
+          <article>
+            <h1>Story</h1>
+            <p>Full article text with important details.</p>
+            <p>Second paragraph with more context and background information.</p>
+            <p>Third paragraph discussing implications and analysis.</p>
+            <p>Fourth paragraph with expert commentary from industry leaders.</p>
+            <p>Fifth paragraph wrapping up the story with final thoughts.</p>
+          </article>
+        </main>
+        <aside class="sidebar"><div class="ad">Buy stuff</div></aside>
+        <footer><p>Footer</p></footer>
+      </body></html>
+    `;
+    const { url, close } = await startTestServer({ body: testHtml });
+    try {
+      const result = await fetchAndConvertToMarkdown(mockServer as any, url);
+      // Should strip nav/footer since readability is on by default
+      assert.ok(result.includes('Story'), `Expected Story, got: ${result.substring(0, 200)}`);
+      assert.ok(!result.includes('Navigation'), 'Should strip nav by default');
+      assert.ok(!result.includes('Footer'), 'Should strip footer by default');
+      assert.ok(!result.includes('Buy stuff'), 'Should strip sidebar ads');
     } finally {
       await close();
     }

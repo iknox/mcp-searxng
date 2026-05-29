@@ -1,6 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { isIP } from "node:net";
 import { NodeHtmlMarkdown } from "node-html-markdown";
+import { Readability } from "@mozilla/readability";
+import { JSDOM } from "jsdom";
 import { fetch as undiciFetch } from "undici";
 import { createProxyAgent, createDefaultAgent, ProxyType } from "./proxy.js";
 import { logMessage } from "./logging.js";
@@ -25,6 +27,7 @@ interface PaginationOptions {
   section?: string;
   paragraphRange?: string;
   readHeadings?: boolean;
+  extractMainContent?: boolean;
 }
 
 function isPrivateHostname(hostname: string): boolean {
@@ -168,6 +171,16 @@ function extractHeadings(markdownContent: string): string {
   return headings.join('\n');
 }
 
+export function extractMainContent(html: string, url: string): string | null {
+  const doc = new JSDOM(html, { url });
+  const reader = new Readability(doc.window.document);
+  const article = reader.parse();
+  if (!article?.content) {
+    return null;
+  }
+  return article.content;
+}
+
 function applyPaginationOptions(markdownContent: string, options: PaginationOptions): string {
   let result = markdownContent;
 
@@ -297,6 +310,20 @@ export async function fetchAndConvertToMarkdown(
 
     if (!htmlContent || htmlContent.trim().length === 0) {
       throw createContentError("Website returned empty content.", url);
+    }
+
+    // Extract main content with Readability when enabled (default: on).
+    // Falls back to full HTML on non-article pages (no content extracted).
+    if (paginationOptions.extractMainContent !== false) {
+      try {
+        const extracted = extractMainContent(htmlContent, url);
+        if (extracted) {
+          htmlContent = extracted;
+          logMessage(mcpServer, "info", `Readability extracted main content for: ${url}`);
+        }
+      } catch (readabilityErr: any) {
+        logMessage(mcpServer, "warning", `Readability failed for ${url} (falling back to full HTML): ${readabilityErr.message}`);
+      }
     }
 
     // Convert HTML to Markdown

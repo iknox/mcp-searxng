@@ -74,7 +74,9 @@ export const READ_URL_TOOL: Tool = {
   name: "web_url_read",
   description:
     "Read the content from an URL. " +
-    "Use this for further information retrieving to understand the content of each URL.",
+    "Use this for further information retrieving to understand the content of each URL. " +
+    "By default, extracts the main article content using Mozilla Readability (strips navigation, sidebars, footers). " +
+    "Set extractMainContent: false to fetch the full page instead.",
   annotations: {
     readOnlyHint: true,
     openWorldHint: true,
@@ -107,6 +109,10 @@ export const READ_URL_TOOL: Tool = {
       readHeadings: {
         type: "boolean",
         description: "Return only a list of headings instead of full content",
+      },
+      extractMainContent: {
+        type: "boolean",
+        description: "Use Mozilla Readability to extract the main article content, stripping navigation, sidebars, and other chrome. Defaults to true. Set to false to fetch the full page.",
       },
     },
     required: ["url"],

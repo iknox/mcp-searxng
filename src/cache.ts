@@ -9,7 +9,7 @@ class SimpleCache {
   private readonly ttlMs: number;
   private cleanupInterval: NodeJS.Timeout | null = null;
 
-  constructor(ttlMs: number = 60000, cleanupIntervalMs: number = 30000) {
+  constructor(ttlMs: number = 300000, cleanupIntervalMs: number = 60000) {
     this.ttlMs = ttlMs;
     this.startCleanup(cleanupIntervalMs);
   }

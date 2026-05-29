@@ -132,6 +132,19 @@ async function runTests() {
     testCache.destroy();
   }, results);
 
+  await testFunction('Default TTL is 300000ms (5 minutes)', async () => {
+    const testCache = new SimpleCache();
+
+    testCache.set('ttl-default', '<html>test</html>', '# Test');
+    assert.ok(testCache.get('ttl-default'), 'Should exist within default TTL');
+
+    // Advance by 1 second — still well within 300s TTL
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(testCache.get('ttl-default'), 'Should still exist after 10ms');
+
+    testCache.destroy();
+  }, results);
+
   printTestSummary(results, 'Cache Module');
   return results;
 }

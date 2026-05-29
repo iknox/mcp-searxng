@@ -73,12 +73,14 @@ export const WEB_SEARCH_TOOL: Tool = {
 export const READ_URL_TOOL: Tool = {
   name: "web_url_read",
   description:
-    "Read the content from an URL. " +
-    "Use this for further information retrieving to understand the content of each URL. " +
+    "PREFER A TWO-PASS APPROACH for pages that look large or have obvious structure: " +
+    "first call with readHeadings=true (cheap, returns only the heading outline), " +
+    "then call with section or paragraphRange to pull only the relevant parts. " +
+    "This saves significant tokens on long pages. " +
+    "Use a single full fetch only for short or unstructured pages. " +
     "By default, extracts the main article content using Mozilla Readability (strips navigation, sidebars, footers) " +
     "and prepends a YAML metadata block (title, author, publish date, description, site name). " +
-    "For large pages, consider using readHeadings first to preview structure, then section or paragraphRange to pull only the relevant parts. " +
-    "Set extractMainContent: false to fetch the full page. Set extractMetadata: false to skip the metadata block.",
+    "Pages over 5MB are rejected early with a suggestion to use readHeadings or section instead.",
   annotations: {
     readOnlyHint: true,
     openWorldHint: true,
@@ -88,29 +90,45 @@ export const READ_URL_TOOL: Tool = {
     properties: {
       url: {
         type: "string",
-        description: "URL",
+        description: "URL to fetch",
+      },
+      readHeadings: {
+        type: "boolean",
+        description:
+          "Return ONLY the heading outline of the page (no body text). " +
+          "Use this FIRST on any page with obvious section structure " +
+          "to identify which sections are relevant before fetching full content. " +
+          "Extremely cheap — headings are typically under 500 characters.",
+      },
+      section: {
+        type: "string",
+        description:
+          "Return only the content under a specific heading. " +
+          "Call readHeadings first to find the exact heading text, " +
+          "then pass that heading here to pull just that section.",
+      },
+      paragraphRange: {
+        type: "string",
+        description:
+          "Return only specific paragraphs by number (e.g., '1-3' for the first three, " +
+          "'5' for just the fifth, '10-' for paragraph 10 onward). " +
+          "Use after skimming headings or when you only need the lede.",
       },
       startChar: {
         type: "number",
-        description: "Starting character position for content extraction (default: 0)",
+        description:
+          "Zero-based character offset to start reading from. " +
+          "Use maxLength instead unless you need to resume a previous partial read.",
         minimum: 0,
       },
       maxLength: {
         type: "number",
-        description: "Maximum number of characters to return",
+        description:
+          "Maximum characters to return. " +
+          "Defaults to 8000 on bare full-page fetches to avoid token waste. " +
+          "Set explicitly for larger or smaller limits. " +
+          "Combine with startChar to paginate through very long content.",
         minimum: 1,
-      },
-      section: {
-        type: "string",
-        description: "Extract content under a specific heading (searches for heading text)",
-      },
-      paragraphRange: {
-        type: "string",
-        description: "Return specific paragraph ranges (e.g., '1-5', '3', '10-')",
-      },
-      readHeadings: {
-        type: "boolean",
-        description: "Return only a list of headings instead of full content",
       },
       extractMainContent: {
         type: "boolean",

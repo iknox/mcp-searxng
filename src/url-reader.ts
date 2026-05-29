@@ -28,6 +28,15 @@ interface PaginationOptions {
   paragraphRange?: string;
   readHeadings?: boolean;
   extractMainContent?: boolean;
+  extractMetadata?: boolean;
+}
+
+interface PageMetadata {
+  title?: string;
+  author?: string;
+  publishedDate?: string;
+  description?: string;
+  siteName?: string;
 }
 
 function isPrivateHostname(hostname: string): boolean {
@@ -181,6 +190,59 @@ export function extractMainContent(html: string, url: string): string | null {
   return article.content;
 }
 
+function getMeta(doc: Document, name: string): string | undefined {
+  // Try name attribute first, then property (og:), then itemprop
+  const el = doc.querySelector(`meta[name="${name}"], meta[property="${name}"], meta[itemprop="${name}"]`);
+  return el?.getAttribute("content")?.trim() || undefined;
+}
+
+export function extractMetadata(html: string, url: string): PageMetadata {
+  const doc = new JSDOM(html, { url }).window.document;
+
+  const title = getMeta(doc, "og:title")
+    || getMeta(doc, "twitter:title")
+    || doc.querySelector("title")?.textContent?.trim()
+    || undefined;
+
+  const author = getMeta(doc, "author")
+    || getMeta(doc, "article:author")
+    || getMeta(doc, "og:article:author")
+    || undefined;
+
+  const publishedDate = getMeta(doc, "article:published_time")
+    || getMeta(doc, "og:article:published_time")
+    || getMeta(doc, "date")
+    || getMeta(doc, "pubdate")
+    || undefined;
+
+  const description = getMeta(doc, "description")
+    || getMeta(doc, "og:description")
+    || getMeta(doc, "twitter:description")
+    || undefined;
+
+  const siteName = getMeta(doc, "og:site_name")
+    || undefined;
+
+  // Only include keys that have values
+  const result: PageMetadata = {};
+  if (title) result.title = title;
+  if (author) result.author = author;
+  if (publishedDate) result.publishedDate = publishedDate;
+  if (description) result.description = description;
+  if (siteName) result.siteName = siteName;
+  return result;
+}
+
+function formatMetadataBlock(metadata: PageMetadata): string {
+  const lines: string[] = [];
+  if (metadata.title) lines.push(`title: ${metadata.title}`);
+  if (metadata.author) lines.push(`author: ${metadata.author}`);
+  if (metadata.publishedDate) lines.push(`published: ${metadata.publishedDate}`);
+  if (metadata.description) lines.push(`description: ${metadata.description}`);
+  if (metadata.siteName) lines.push(`site: ${metadata.siteName}`);
+  return lines.length > 0 ? `---\n${lines.join("\n")}\n---\n\n` : "";
+}
+
 function applyPaginationOptions(markdownContent: string, options: PaginationOptions): string {
   let result = markdownContent;
 
@@ -312,6 +374,17 @@ export async function fetchAndConvertToMarkdown(
       throw createContentError("Website returned empty content.", url);
     }
 
+    // Extract metadata from raw HTML before readability strips <head>.
+    let metadataBlock = "";
+    if (paginationOptions.extractMetadata !== false) {
+      try {
+        const metadata = extractMetadata(htmlContent, url);
+        metadataBlock = formatMetadataBlock(metadata);
+      } catch (metaErr: any) {
+        logMessage(mcpServer, "warning", `Metadata extraction failed for ${url}: ${metaErr.message}`);
+      }
+    }
+
     // Extract main content with Readability when enabled (default: on).
     // Falls back to full HTML on non-article pages (no content extracted).
     if (paginationOptions.extractMainContent !== false) {
@@ -340,15 +413,20 @@ export async function fetchAndConvertToMarkdown(
       return createEmptyContentWarning(url, htmlContent.length, htmlContent);
     }
 
-    // Only cache successful markdown conversion
+    // Only cache successful markdown conversion (without metadata, which
+    // is prepended at read time so pagination options still work on body).
     urlCache.set(url, htmlContent, markdownContent);
 
     // Apply pagination options
     const result = applyPaginationOptions(markdownContent, paginationOptions);
 
+    // Prepend metadata block after pagination so startChar/maxLength
+    // only apply to body content, not the metadata header.
+    const finalResult = metadataBlock + result;
+
     const duration = Date.now() - startTime;
-    logMessage(mcpServer, "info", `Successfully fetched and converted URL: ${url} (${result.length} chars in ${duration}ms)`);
-    return result;
+    logMessage(mcpServer, "info", `Successfully fetched and converted URL: ${url} (${finalResult.length} chars in ${duration}ms)`);
+    return finalResult;
   } catch (error: any) {
     if (error.name === "AbortError") {
       logMessage(mcpServer, "error", `Timeout fetching URL: ${url} (${timeoutMs}ms)`);

@@ -75,8 +75,10 @@ export const READ_URL_TOOL: Tool = {
   description:
     "Read the content from an URL. " +
     "Use this for further information retrieving to understand the content of each URL. " +
-    "By default, extracts the main article content using Mozilla Readability (strips navigation, sidebars, footers). " +
-    "Set extractMainContent: false to fetch the full page instead.",
+    "By default, extracts the main article content using Mozilla Readability (strips navigation, sidebars, footers) " +
+    "and prepends a YAML metadata block (title, author, publish date, description, site name). " +
+    "For large pages, consider using readHeadings first to preview structure, then section or paragraphRange to pull only the relevant parts. " +
+    "Set extractMainContent: false to fetch the full page. Set extractMetadata: false to skip the metadata block.",
   annotations: {
     readOnlyHint: true,
     openWorldHint: true,
@@ -113,6 +115,10 @@ export const READ_URL_TOOL: Tool = {
       extractMainContent: {
         type: "boolean",
         description: "Use Mozilla Readability to extract the main article content, stripping navigation, sidebars, and other chrome. Defaults to true. Set to false to fetch the full page.",
+      },
+      extractMetadata: {
+        type: "boolean",
+        description: "Extract page metadata (title, author, publish date, description, site name) from meta tags and prepend it as a YAML block. Defaults to true. Set to false to skip metadata extraction.",
       },
     },
     required: ["url"],

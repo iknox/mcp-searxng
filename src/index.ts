@@ -34,6 +34,7 @@ export function isWebUrlReadArgs(args: unknown): args is {
   paragraphRange?: string;
   readHeadings?: boolean;
   extractMainContent?: boolean;
+  extractMetadata?: boolean;
 } {
   if (
     typeof args !== "object" ||
@@ -64,6 +65,9 @@ export function isWebUrlReadArgs(args: unknown): args is {
     return false;
   }
   if (urlArgs.extractMainContent !== undefined && typeof urlArgs.extractMainContent !== "boolean") {
+    return false;
+  }
+  if (urlArgs.extractMetadata !== undefined && typeof urlArgs.extractMetadata !== "boolean") {
     return false;
   }
   if (urlArgs.readHeadings !== undefined && typeof urlArgs.readHeadings !== "boolean") {
@@ -142,6 +146,7 @@ export function createMcpServer(): McpServer {
           paragraphRange: args.paragraphRange,
           readHeadings: args.readHeadings,
           extractMainContent: args.extractMainContent,
+          extractMetadata: args.extractMetadata,
         };
 
         const result = await fetchAndConvertToMarkdown(mcpServer, args.url, 10000, paginationOptions);

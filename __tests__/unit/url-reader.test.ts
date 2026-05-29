@@ -14,7 +14,7 @@ import { strict as assert } from 'node:assert';
 import * as http from 'node:http';
 import * as net from 'node:net';
 import * as zlib from 'node:zlib';
-import { fetchAndConvertToMarkdown, extractMainContent } from '../../src/url-reader.js';
+import { fetchAndConvertToMarkdown, extractMainContent, extractMetadata } from '../../src/url-reader.js';
 import { urlCache } from '../../src/cache.js';
 import { testFunction, createTestResults, printTestSummary } from '../helpers/test-utils.js';
 import { createMockServer } from '../helpers/mock-server.js';
@@ -770,6 +770,146 @@ async function runTests() {
       assert.ok(!result.includes('Navigation'), 'Should strip nav by default');
       assert.ok(!result.includes('Footer'), 'Should strip footer by default');
       assert.ok(!result.includes('Buy stuff'), 'Should strip sidebar ads');
+    } finally {
+      await close();
+    }
+  }, results);
+
+  // ── metadata extraction ──────────────────────────────────────────────────
+
+  await testFunction('extractMetadata pulls title from og:title', () => {
+    const html = `
+      <html><head>
+        <title>Browser Title</title>
+        <meta property="og:title" content="OG Title">
+      </head><body></body></html>
+    `;
+    const meta = extractMetadata(html, 'https://example.com');
+    assert.equal(meta.title, 'OG Title', 'Should prefer og:title over <title>');
+  }, results);
+
+  await testFunction('extractMetadata falls back to <title> when no og:title', () => {
+    const html = `
+      <html><head><title>Browser Title</title></head><body></body></html>
+    `;
+    const meta = extractMetadata(html, 'https://example.com');
+    assert.equal(meta.title, 'Browser Title');
+  }, results);
+
+  await testFunction('extractMetadata extracts author from meta tags', () => {
+    const html = `
+      <html><head>
+        <meta name="author" content="Jane Doe">
+      </head><body></body></html>
+    `;
+    const meta = extractMetadata(html, 'https://example.com');
+    assert.equal(meta.author, 'Jane Doe');
+  }, results);
+
+  await testFunction('extractMetadata extracts publish date from article:published_time', () => {
+    const html = `
+      <html><head>
+        <meta property="article:published_time" content="2024-03-15T10:30:00Z">
+      </head><body></body></html>
+    `;
+    const meta = extractMetadata(html, 'https://example.com');
+    assert.equal(meta.publishedDate, '2024-03-15T10:30:00Z');
+  }, results);
+
+  await testFunction('extractMetadata extracts description from og:description', () => {
+    const html = `
+      <html><head>
+        <meta property="og:description" content="A fascinating article about metadata extraction.">
+      </head><body></body></html>
+    `;
+    const meta = extractMetadata(html, 'https://example.com');
+    assert.equal(meta.description, 'A fascinating article about metadata extraction.');
+  }, results);
+
+  await testFunction('extractMetadata extracts site name from og:site_name', () => {
+    const html = `
+      <html><head>
+        <meta property="og:site_name" content="Example News">
+      </head><body></body></html>
+    `;
+    const meta = extractMetadata(html, 'https://example.com');
+    assert.equal(meta.siteName, 'Example News');
+  }, results);
+
+  await testFunction('extractMetadata returns empty object for pages with no metadata', () => {
+    const html = '<html><body><p>Just content, no meta tags.</p></body></html>';
+    const meta = extractMetadata(html, 'https://example.com');
+    assert.equal(Object.keys(meta).length, 0, `Expected empty object, got: ${JSON.stringify(meta)}`);
+  }, results);
+
+  await testFunction('extractMetadata handles malformed HTML gracefully', () => {
+    const html = '<html><head><meta name="description" content="Valid">';
+    const meta = extractMetadata(html, 'https://example.com');
+    assert.equal(meta.description, 'Valid');
+  }, results);
+
+  await testFunction('metadata is prepended as YAML block via fetchAndConvertToMarkdown', async () => {
+    const mockServer = createMockServer();
+    urlCache.clear();
+
+    const testHtml = `
+      <html><head>
+        <title>Test Page</title>
+        <meta name="author" content="Test Author">
+        <meta property="og:site_name" content="Test Site">
+      </head><body>
+        <main>
+          <article>
+            <h1>Article Heading</h1>
+            <p>Paragraph one with enough text to trigger readability.</p>
+            <p>Paragraph two with more detailed information.</p>
+            <p>Paragraph three continuing the narrative.</p>
+            <p>Paragraph four with additional context.</p>
+            <p>Paragraph five wrapping everything up.</p>
+          </article>
+        </main>
+      </body></html>
+    `;
+    const { url, close } = await startTestServer({ body: testHtml });
+    try {
+      const result = await fetchAndConvertToMarkdown(mockServer as any, url);
+      assert.ok(result.startsWith('---'), `Expected YAML block, got: ${result.substring(0, 100)}`);
+      assert.ok(result.includes('title:'), 'Should include title in metadata');
+      assert.ok(result.includes('author: Test Author'), 'Should include author');
+      assert.ok(result.includes('site: Test Site'), 'Should include site name');
+      assert.ok(result.includes('---\n\n'), 'YAML block should end before content');
+      // Body content should appear after metadata
+      const afterMeta = result.split('---\n\n')[1];
+      assert.ok(afterMeta, 'Should have content after metadata block');
+      assert.ok(afterMeta.includes('Article Heading'), `Expected article heading in body, got: ${afterMeta?.substring(0, 200)}`);
+    } finally {
+      await close();
+    }
+  }, results);
+
+  await testFunction('extractMetadata false skips metadata block', async () => {
+    const mockServer = createMockServer();
+    urlCache.clear();
+
+    const testHtml = `
+      <html><head><title>Test Page</title></head><body>
+        <main><article>
+          <h1>Article Heading</h1>
+          <p>Paragraph one with text content.</p>
+          <p>Paragraph two with detailed information.</p>
+          <p>Paragraph three continuing the story.</p>
+          <p>Paragraph four building on previous points.</p>
+          <p>Paragraph five concluding the article.</p>
+        </article></main>
+      </body></html>
+    `;
+    const { url, close } = await startTestServer({ body: testHtml });
+    try {
+      const result = await fetchAndConvertToMarkdown(mockServer as any, url, 10000, {
+        extractMetadata: false,
+      });
+      assert.ok(!result.startsWith('---'), 'Should not have YAML metadata block');
+      assert.ok(result.includes('Article Heading'), 'Should still have content');
     } finally {
       await close();
     }

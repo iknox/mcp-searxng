@@ -639,7 +639,7 @@ async function runTests() {
     }
   }, results);
 
-  // ── readability extraction ────────────────────────────────────────────────
+// ── readability extraction ────────────────────────────────────────────────
 
   await testFunction('extractMainContent strips nav, sidebar, and footer', () => {
     const html = `
@@ -770,6 +770,27 @@ async function runTests() {
       assert.ok(!result.includes('Navigation'), 'Should strip nav by default');
       assert.ok(!result.includes('Footer'), 'Should strip footer by default');
       assert.ok(!result.includes('Buy stuff'), 'Should strip sidebar ads');
+    } finally {
+      await close();
+    }
+  }, results);
+
+  // ── default maxLength cap ───────────────────────────────────────────────
+
+  await testFunction('Bare fetch applies default maxLength cap', async () => {
+    const mockServer = createMockServer();
+    urlCache.clear();
+
+    // Generate content well over 8000 chars
+    let bodyContent = '';
+    for (let i = 0; i < 2000; i++) {
+      bodyContent += `<p>Paragraph ${i} with some text content to fill space.</p>\n`;
+    }
+    const testHtml = `<html><body>${bodyContent}</body></html>`;
+    const { url, close } = await startTestServer({ body: testHtml });
+    try {
+      const result = await fetchAndConvertToMarkdown(mockServer as any, url);
+      assert.ok(result.length <= 8100, `Expected ~8000 chars, got ${result.length}`);
     } finally {
       await close();
     }
@@ -910,6 +931,76 @@ async function runTests() {
       });
       assert.ok(!result.startsWith('---'), 'Should not have YAML metadata block');
       assert.ok(result.includes('Article Heading'), 'Should still have content');
+    } finally {
+      await close();
+    }
+  }, results);
+
+  // ── default maxLength cap integration ─────────────────────────────────────
+
+  await testFunction('Explicit maxLength overrides default cap', async () => {
+    const mockServer = createMockServer();
+    urlCache.clear();
+
+    let bodyContent = '';
+    for (let i = 0; i < 2000; i++) {
+      bodyContent += `<p>Paragraph ${i} with some text content to fill space.</p>\n`;
+    }
+    const testHtml = `<html><body>${bodyContent}</body></html>`;
+    const { url, close } = await startTestServer({ body: testHtml });
+    try {
+      const result = await fetchAndConvertToMarkdown(mockServer as any, url, 10000, {
+        maxLength: 500,
+      });
+      assert.ok(result.length <= 500, `Expected <= 500 chars, got ${result.length}`);
+    } finally {
+      await close();
+    }
+  }, results);
+
+  await testFunction('Targeted fetch with section is not capped', async () => {
+    const mockServer = createMockServer();
+    urlCache.clear();
+
+    const testHtml =
+      '<html><body><h1>Intro</h1><p>A short intro.</p><h2>Target</h2><p>Section content here.</p></body></html>';
+    const { url, close } = await startTestServer({ body: testHtml });
+    try {
+      const result = await fetchAndConvertToMarkdown(mockServer as any, url, 10000, {
+        section: 'Target',
+      });
+      assert.ok(result.includes('Section content here'), `Expected section content, got: ${result}`);
+    } finally {
+      await close();
+    }
+  }, results);
+
+  await testFunction('Targeted fetch with readHeadings is not capped', async () => {
+    const mockServer = createMockServer();
+    urlCache.clear();
+
+    const testHtml =
+      '<html><body><h1>One</h1><h2>Two</h2><h3>Three</h3></body></html>';
+    const { url, close } = await startTestServer({ body: testHtml });
+    try {
+      const result = await fetchAndConvertToMarkdown(mockServer as any, url, 10000, {
+        readHeadings: true,
+      });
+      assert.ok(result.includes('# One'), `Expected headings, got: ${result}`);
+    } finally {
+      await close();
+    }
+  }, results);
+
+  await testFunction('Short bare fetch is not truncated by default cap', async () => {
+    const mockServer = createMockServer();
+    urlCache.clear();
+
+    const testHtml = '<html><body><p>Short content under 8000 chars.</p></body></html>';
+    const { url, close } = await startTestServer({ body: testHtml });
+    try {
+      const result = await fetchAndConvertToMarkdown(mockServer as any, url);
+      assert.ok(result.includes('Short content'), `Expected full short content, got: ${result}`);
     } finally {
       await close();
     }

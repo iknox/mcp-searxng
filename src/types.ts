@@ -123,7 +123,7 @@ export const READ_URL_TOOL: Tool = {
       },
       maxLength: {
         type: "number",
-        description:
+description:
           "Maximum characters to return. " +
           "Defaults to 8000 on bare full-page fetches to avoid token waste. " +
           "Set explicitly for larger or smaller limits. " +

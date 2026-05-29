@@ -180,6 +180,14 @@ function extractHeadings(markdownContent: string): string {
   return headings.join('\n');
 }
 
+const DEFAULT_MAX_LENGTH = 8000;
+
+function isTargetedFetch(options: PaginationOptions): boolean {
+  return options.readHeadings === true
+    || options.section !== undefined
+    || options.paragraphRange !== undefined;
+}
+
 export function extractMainContent(html: string, url: string): string | null {
   const doc = new JSDOM(html, { url });
   const reader = new Readability(doc.window.document);
@@ -267,9 +275,13 @@ function applyPaginationOptions(markdownContent: string, options: PaginationOpti
     }
   }
 
-  // Apply character-based pagination last
-  if (options.startChar !== undefined || options.maxLength !== undefined) {
+  // Apply character-based pagination. When the caller specified no
+  // pagination at all (bare full-page fetch), apply a default cap to
+  // prevent accidentally pulling huge pages into context.
+  if (options.maxLength !== undefined || options.startChar !== undefined) {
     result = applyCharacterPagination(result, options.startChar, options.maxLength);
+  } else if (!isTargetedFetch(options) && result.length > DEFAULT_MAX_LENGTH) {
+    result = applyCharacterPagination(result, 0, DEFAULT_MAX_LENGTH);
   }
 
   return result;

@@ -205,7 +205,8 @@ export async function createHttpServer(
       // Pre-register the session and manually set transport state so
       // handleRequest finds a valid session for non-initialize messages.
       sessions.set(newSessionId, { transport, mcpServer });
-      (transport as any)._sessionId = newSessionId;
+      (transport as any).sessionId = newSessionId;
+      (transport as any)._initialized = true;
       req.headers['mcp-session-id'] = newSessionId;
     }
 

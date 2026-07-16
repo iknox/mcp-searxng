@@ -12,14 +12,25 @@ import { TestResult } from './helpers/test-utils.js';
 import { runTests as runLoggingTests } from './unit/logging.test.js';
 import { runTests as runTypesTests } from './unit/types.test.js';
 import { runTests as runCacheTests } from './unit/cache.test.js';
+import { runTests as runSearchCacheTests } from './unit/search-cache.test.js';
 import { runTests as runProxyTests } from './unit/proxy.test.js';
 import { runTests as runErrorHandlerTests } from './unit/error-handler.test.js';
+import { runTests as runSearxngInstancesTests } from './unit/searxng-instances.test.js';
 import { runTests as runResourcesTests } from './unit/resources.test.js';
 import { runTests as runSearchTests } from './unit/search.test.js';
+import { runTests as runSuggestionsTests } from './unit/suggestions.test.js';
+import { runTests as runInstanceInfoTests } from './unit/instance-info.test.js';
 import { runTests as runUrlReaderTests } from './unit/url-reader.test.js';
+import { runTests as runUrlSecurityTests } from './unit/url-security.test.js';
 import { runTests as runTlsConfigTests } from './unit/tls-config.test.js';
+import { runTests as runHttpServerUnitTests } from './unit/http-server.test.js';
+import { runTests as runVersionTests } from './unit/version.test.js';
+import { runTests as runHttpSecurityTests } from './unit/http-security.test.js';
+import { runTests as runFuzzTests } from './fuzz/search-params.fuzz.js';
 import { runTests as runHttpServerTests } from './integration/http-server.test.js';
 import { runTests as runIndexTests } from './integration/index.test.js';
+import { runTests as runMcpHandlersTests } from './integration/mcp-handlers.test.js';
+import { runTests as runCliTests } from './integration/cli.test.js';
 
 interface TestSuite {
   name: string;
@@ -32,16 +43,27 @@ const testSuites: TestSuite[] = [
   { name: 'Logging', category: 'unit', run: runLoggingTests },
   { name: 'Types', category: 'unit', run: runTypesTests },
   { name: 'Cache', category: 'unit', run: runCacheTests },
+  { name: 'Search Cache', category: 'unit', run: runSearchCacheTests },
   { name: 'Proxy', category: 'unit', run: runProxyTests },
   { name: 'Error Handler', category: 'unit', run: runErrorHandlerTests },
+  { name: 'SearXNG Instances', category: 'unit', run: runSearxngInstancesTests },
   { name: 'Resources', category: 'unit', run: runResourcesTests },
   { name: 'Search', category: 'unit', run: runSearchTests },
+  { name: 'Suggestions', category: 'unit', run: runSuggestionsTests },
+  { name: 'Instance Info', category: 'unit', run: runInstanceInfoTests },
   { name: 'URL Reader', category: 'unit', run: runUrlReaderTests },
+  { name: 'URL Security', category: 'unit', run: runUrlSecurityTests },
   { name: 'TLS Config', category: 'unit', run: runTlsConfigTests },
+  { name: 'HTTP Server', category: 'unit', run: runHttpServerUnitTests },
+  { name: 'Version', category: 'unit', run: runVersionTests },
+  { name: 'HTTP Security', category: 'unit', run: runHttpSecurityTests },
+  { name: 'Fuzz Properties', category: 'unit', run: runFuzzTests },
 
   // Integration Tests
   { name: 'HTTP Server', category: 'integration', run: runHttpServerTests },
   { name: 'Main Index', category: 'integration', run: runIndexTests },
+  { name: 'MCP Handlers', category: 'integration', run: runMcpHandlersTests },
+  { name: 'CLI', category: 'integration', run: runCliTests },
 ];
 
 async function runAllTests() {

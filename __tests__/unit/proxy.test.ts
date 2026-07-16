@@ -7,7 +7,8 @@
  */
 
 import { strict as assert } from 'node:assert';
-import { createProxyAgent, createDefaultAgent } from '../../src/proxy.js';
+import { fileURLToPath } from 'node:url';
+import { createProxyAgent, createDefaultAgent, applySearchRequestConfig, ProxyType } from '../../src/proxy.js';
 import { testFunction, createTestResults, printTestSummary } from '../helpers/test-utils.js';
 import { EnvManager } from '../helpers/env-utils.js';
 
@@ -88,7 +89,7 @@ async function runTests() {
     envManager.set('HTTP_PROXY', 'socks5://proxy:1080');
     
     try {
-      const agent = createProxyAgent();
+      createProxyAgent();
       assert.fail('Should have thrown error for unsupported protocol');
     } catch (error) {
       assert.ok(error instanceof Error);
@@ -105,7 +106,7 @@ async function runTests() {
       envManager.set('HTTP_PROXY', 'http://proxy:8080');
       
       try {
-        const agent = createProxyAgent();
+        const agent = createProxyAgent(url);
         assert.ok(agent === undefined || agent !== null);
       } catch (error) {
         // Some URL schemes might not be supported, that's ok
@@ -387,12 +388,128 @@ async function runTests() {
     if (agent) assert.ok(typeof agent.dispatch === 'function');
   }, results);
 
+  await testFunction('shouldBypassProxy handles invalid URL without throwing (catch branch)', () => {
+    // Ensure HTTP_PROXY is set and NO_PROXY is set (triggers shouldBypassProxy)
+    // with invalid URL that triggers catch block
+    envManager.delete('HTTP_PROXY');
+    envManager.delete('HTTPS_PROXY');
+    envManager.delete('http_proxy');
+    envManager.delete('https_proxy');
+    envManager.set('HTTP_PROXY', 'http://proxy.example.com:8080');
+    envManager.set('NO_PROXY', 'example.com');
+
+    // Invalid URL: shouldBypassProxy catches the URL parse error and returns false
+    // so the proxy IS used (no bypass). The function must not throw.
+    const agent = createProxyAgent('not-a-valid-url');
+    assert.ok(agent, 'agent should be created (not bypassed) for unparseable URL');
+
+    envManager.restore();
+  }, results);
+
+  await testFunction('URL_READER HTTPS proxy branch (117-123)', () => {
+    // Clear all proxies first to ensure clean state
+    envManager.delete('HTTP_PROXY');
+    envManager.delete('HTTPS_PROXY');
+    envManager.delete('http_proxy');
+    envManager.delete('https_proxy');
+    envManager.delete('SEARCH_HTTP_PROXY');
+    envManager.delete('SEARCH_HTTPS_PROXY');
+    envManager.delete('search_http_proxy');
+    envManager.delete('search_https_proxy');
+    // Set URL_READER_HTTPS_PROXY to force the code path on lines 116-123
+    envManager.set('URL_READER_HTTPS_PROXY', 'http://proxy.example.com:8080');
+
+    // Calling with URL_READER type and HTTPS target URL
+    const agent = createProxyAgent('https://target.example.com', ProxyType.URL_READER);
+    assert.ok(agent, 'proxy agent should be created for URL_READER + HTTPS target');
+    assert.equal(agent!.constructor.name, 'ProxyAgent');
+
+    envManager.restore();
+  }, results);
+
+  await testFunction('no-type HTTPS proxy branch (138-140)', () => {
+    // Clear all proxies first to ensure clean state
+    envManager.delete('HTTP_PROXY');
+    envManager.delete('HTTPS_PROXY');
+    envManager.delete('http_proxy');
+    envManager.delete('https_proxy');
+    envManager.delete('SEARCH_HTTP_PROXY');
+    envManager.delete('SEARCH_HTTPS_PROXY');
+    envManager.delete('search_http_proxy');
+    envManager.delete('search_https_proxy');
+    envManager.delete('URL_READER_HTTP_PROXY');
+    envManager.delete('URL_READER_HTTPS_PROXY');
+    envManager.delete('url_reader_http_proxy');
+    envManager.delete('url_reader_https_proxy');
+    // Set only HTTPS_PROXY to force lines 137-140 with isHttps=true
+    envManager.set('HTTPS_PROXY', 'http://proxy.example.com:8080');
+
+    // Call with no type and HTTPS target (triggers lines 136-140 for no-type branch)
+    const agent = createProxyAgent('https://target.example.com');
+    assert.ok(agent, 'proxy agent should be created when HTTPS_PROXY is set and target is https');
+    assert.equal(agent!.constructor.name, 'ProxyAgent');
+
+    envManager.restore();
+  }, results);
+
+  await testFunction('applySearchRequestConfig sets Basic Auth header when credentials are present', () => {
+    envManager.delete('AUTH_USERNAME');
+    envManager.delete('AUTH_PASSWORD');
+    envManager.delete('SEARCH_USER_AGENT');
+    envManager.delete('USER_AGENT');
+    envManager.set('AUTH_USERNAME', 'testuser');
+    envManager.set('AUTH_PASSWORD', 'testpass');
+
+    const requestOptions: RequestInit = {};
+    applySearchRequestConfig(requestOptions, 'https://searx.example.com/config');
+
+    const headers = (requestOptions.headers ?? {}) as Record<string, string>;
+    assert.ok(headers['authorization'], 'expected Authorization header');
+    assert.ok(headers['authorization'].startsWith('Basic '), 'expected Basic auth scheme');
+
+    envManager.restore();
+  }, results);
+
+  await testFunction('applySearchRequestConfig omits Authorization when credentials are absent', () => {
+    envManager.delete('AUTH_USERNAME');
+    envManager.delete('AUTH_PASSWORD');
+    envManager.delete('SEARCH_USER_AGENT');
+    envManager.delete('USER_AGENT');
+
+    const requestOptions: RequestInit = {};
+    applySearchRequestConfig(requestOptions, 'https://searx.example.com/config');
+
+    const headers = (requestOptions.headers ?? {}) as Record<string, string>;
+    assert.equal(headers['authorization'], undefined, 'Authorization should be absent without credentials');
+
+    envManager.restore();
+  }, results);
+
+  await testFunction('applySearchRequestConfig merges Authorization and User-Agent together', () => {
+    envManager.delete('AUTH_USERNAME');
+    envManager.delete('AUTH_PASSWORD');
+    envManager.delete('SEARCH_USER_AGENT');
+    envManager.delete('USER_AGENT');
+    envManager.set('AUTH_USERNAME', 'u');
+    envManager.set('AUTH_PASSWORD', 'p');
+    envManager.set('USER_AGENT', 'MyBot/1.0');
+
+    const requestOptions: RequestInit = {};
+    applySearchRequestConfig(requestOptions, 'https://searx.example.com/config');
+
+    const headers = (requestOptions.headers ?? {}) as Record<string, string>;
+    assert.ok(headers['authorization']?.startsWith('Basic '), 'Authorization should be set');
+    assert.equal(headers['user-agent'], 'MyBot/1.0', 'User-Agent should be set');
+
+    envManager.restore();
+  }, results);
+
   printTestSummary(results, 'Proxy Module');
   return results;
 }
 
 // Run if executed directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {
   runTests().then(results => {
     process.exit(results.failed > 0 ? 1 : 0);
   }).catch(console.error);

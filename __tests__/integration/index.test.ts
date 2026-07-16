@@ -7,8 +7,11 @@
  */
 
 import { strict as assert } from 'node:assert';
-import { 
-  packageVersion, 
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { packageVersion } from '../../src/version.js';
+import {
   isWebUrlReadArgs,
   createMcpServer
 } from '../../src/index.js';
@@ -189,6 +192,74 @@ async function runTests() {
     env.restore();
   }, results);
 
+  await testFunction('Importing index.ts does not start the CLI server', () => {
+    // When this suite runs under a debugger (e.g. VS Code's JavaScript Debug
+    // Terminal / auto-attach), Node injects the inspector into child processes
+    // and prints banner lines like "Debugger attached." to stderr. That has
+    // nothing to do with the program under test, so:
+    //   1. strip the inspector env vars so the child never attaches, and
+    //   2. filter any residual debugger banner lines from the captured output.
+    const { NODE_OPTIONS: _n, VSCODE_INSPECTOR_OPTIONS: _v, ...cleanEnv } = process.env;
+
+    const stripDebuggerNoise = (output: string): string =>
+      output
+        .split('\n')
+        .filter(line => !/^(Debugger attached\.|Waiting for the debugger to disconnect\.\.\.|Debugger listening on |For help, see: https:\/\/nodejs\.org\/en\/docs\/inspector)/.test(line))
+        .join('\n');
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        '--import',
+        'tsx',
+        '-e',
+        "await import('./src/index.ts')",
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...cleanEnv,
+          MCP_HTTP_PORT: '',
+          SEARXNG_URL: '',
+        },
+        encoding: 'utf8',
+        timeout: 5000,
+      },
+    );
+
+    assert.equal(result.status, 0, `Import process failed: ${result.stderr}`);
+    assert.equal(stripDebuggerNoise(result.stdout), '');
+    assert.equal(stripDebuggerNoise(result.stderr), '');
+  }, results);
+
+  await testFunction('Running cli.js responds to MCP initialize', () => {
+    // Regression guard for issue #91: if cli.js exits without calling main()
+    // (e.g. an isMainModule-style guard that returns false), stdout is empty
+    // and we never get an initialize result back.
+    const initMsg = JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'initialize',
+      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '0.1.0' } },
+    }) + '\n';
+
+    const tsxBin = path.join(process.cwd(), 'node_modules', '.bin', 'tsx');
+    const result = spawnSync(
+      tsxBin,
+      ['src/cli.ts'],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, MCP_HTTP_PORT: '', SEARXNG_URL: 'https://test-searx.example.com' },
+        input: initMsg,
+        encoding: 'utf8',
+        timeout: 10000,
+      },
+    );
+
+    assert.equal(result.status, 0, `cli.js exited with error: ${result.stderr}`);
+    const response = result.stdout.split('\n').map(l => { try { return JSON.parse(l); } catch { return null; } }).find(m => m?.id === 1);
+    assert.ok(response, 'no response to initialize — server did not start');
+    assert.ok(response.result?.serverInfo?.name, 'initialize result missing serverInfo');
+  }, results);
+
   await testFunction('createMcpServer returns an McpServer instance', () => {
     const server = createMcpServer();
     assert.ok(server, 'should return a truthy value');
@@ -207,7 +278,7 @@ async function runTests() {
 }
 
 // Run if executed directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {
   runTests().then(results => {
     process.exit(results.failed > 0 ? 1 : 0);
   }).catch(console.error);

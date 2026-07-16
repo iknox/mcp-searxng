@@ -1,11 +1,12 @@
 import express from "express";
 import cors from "cors";
+import rateLimit from "express-rate-limit";
 import { randomUUID } from "crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { logMessage } from "./logging.js";
-import { packageVersion } from "./index.js";
+import { packageVersion } from "./version.js";
 import {
   getHttpSecurityConfig,
   isOriginAllowed,
@@ -18,12 +19,88 @@ interface Session {
   mcpServer: McpServer;
 }
 
+/**
+ * Resolves the bind host from the MCP_HTTP_HOST environment variable.
+ * Falls back to "127.0.0.1" (localhost only) when the variable is absent or whitespace-only.
+ * Set MCP_HTTP_HOST=0.0.0.0 to expose on all interfaces (e.g. Docker, remote access).
+ */
+export function resolveBindHost(envValue: string | undefined): string {
+  const trimmed = envValue?.trim();
+  if (!trimmed) {
+    return "127.0.0.1";
+  }
+  return trimmed;
+}
+
+/**
+ * Parses a positive-integer rate-limit setting from the environment.
+ * Absent/blank → fallback silently. Present-but-invalid (NaN or <= 0) →
+ * fallback plus a one-line console.warn so an operator typo cannot silently
+ * disable rate limiting (a fail-open control). Uses console.warn, not the MCP
+ * logMessage path, because makeRateLimiters runs without an McpServer in scope.
+ */
+export function parseRateLimitEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+  const parsed = parseInt(raw, 10);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    console.warn(
+      `⚠️  Ignoring invalid ${name}="${raw}". Expected a positive integer. Using default ${fallback}.`,
+    );
+    return fallback;
+  }
+  return parsed;
+}
+
+function makeRateLimiters() {
+  const windowMs = parseRateLimitEnv("MCP_RATE_WINDOW_MS", 60000);
+
+  const initLimiter = rateLimit({
+    windowMs,
+    max: parseRateLimitEnv("MCP_RATE_INIT_MAX", 20),
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      jsonrpc: "2.0",
+      error: { code: -32029, message: "Too many requests" },
+      id: null,
+    },
+  });
+
+  const sessionLimiter = rateLimit({
+    windowMs,
+    max: parseRateLimitEnv("MCP_RATE_SESSION_MAX", 300),
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      jsonrpc: "2.0",
+      error: { code: -32029, message: "Too many requests" },
+      id: null,
+    },
+  });
+
+  const healthLimiter = rateLimit({
+    windowMs: 60000,
+    max: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  return { initLimiter, sessionLimiter, healthLimiter };
+}
+
 export async function createHttpServer(
-  createMcpServer: () => McpServer
+  createMcpServer: () => McpServer,
+  port?: number
 ): Promise<express.Application> {
   const app = express();
-  const security = getHttpSecurityConfig();
+  const security = getHttpSecurityConfig(port);
   validateHttpSecurityConfig(security);
+  if (security.trustProxy !== false) {
+    app.set('trust proxy', security.trustProxy);
+  }
 
   app.use(express.json());
   
@@ -51,11 +128,13 @@ export async function createHttpServer(
     });
   }
 
+  const { initLimiter, sessionLimiter, healthLimiter } = makeRateLimiters();
+
   // Map to store sessions by session ID
   const sessions = new Map<string, Session>();
 
   // Handle POST requests for client-to-server communication
-  app.post('/mcp', async (req, res) => {
+  app.post('/mcp', initLimiter, sessionLimiter, async (req, res) => {
     if (!isRequestAuthorized(req.headers.authorization as string | undefined, security)) {
       rejectUnauthorized(res);
       return;
@@ -71,7 +150,7 @@ export async function createHttpServer(
       transport = session.transport;
       mcpServer = session.mcpServer;
       logMessage(mcpServer, "debug", `Reusing session: ${sessionId}`);
-    } else if (!sessionId && isInitializeRequest(req.body)) {
+    } else if (isInitializeRequest(req.body)) {
       // New initialization request — create fresh McpServer and transport
       mcpServer = createMcpServer();
 
@@ -105,11 +184,12 @@ export async function createHttpServer(
         contentType: req.headers['content-type'],
         accept: req.headers['accept']
       });
-      res.status(400).json({
+      const sessionNotFound = Boolean(sessionId);
+      res.status(sessionNotFound ? 404 : 400).json({
         jsonrpc: '2.0',
         error: {
-          code: -32000,
-          message: 'Bad Request: No valid session ID provided',
+          code: sessionNotFound ? -32001 : -32000,
+          message: sessionNotFound ? 'Session not found' : 'Bad Request: No valid session ID provided',
         },
         id: null,
       });
@@ -135,7 +215,7 @@ export async function createHttpServer(
   });
 
   // Handle GET requests for server-to-client notifications via SSE
-  app.get('/mcp', async (req, res) => {
+  app.get('/mcp', sessionLimiter, async (req, res) => {
     if (!isRequestAuthorized(req.headers.authorization as string | undefined, security)) {
       rejectUnauthorized(res);
       return;
@@ -166,7 +246,7 @@ export async function createHttpServer(
   });
 
   // Handle DELETE requests for session termination
-  app.delete('/mcp', async (req, res) => {
+  app.delete('/mcp', sessionLimiter, async (req, res) => {
     if (!isRequestAuthorized(req.headers.authorization as string | undefined, security)) {
       rejectUnauthorized(res);
       return;
@@ -199,7 +279,7 @@ export async function createHttpServer(
   });
 
   // Health check endpoint
-  app.get('/health', (_req, res) => {
+  app.get('/health', healthLimiter, (_req, res) => {
     res.json({ 
       status: 'healthy',
       server: 'ihor-sokoliuk/mcp-searxng',

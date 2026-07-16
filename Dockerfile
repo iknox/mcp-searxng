@@ -1,4 +1,4 @@
-FROM node:lts-alpine AS builder
+FROM node:lts-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS builder
 
 WORKDIR /app
 
@@ -6,7 +6,7 @@ COPY ./ /app
 
 RUN --mount=type=cache,target=/root/.npm npm run bootstrap
 
-FROM node:lts-alpine AS release
+FROM node:lts-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS release
 
 RUN apk update && apk upgrade
 
@@ -20,4 +20,6 @@ ENV NODE_ENV=production
 
 RUN npm ci --ignore-scripts --omit=dev && npm uninstall -g npm
 
-ENTRYPOINT ["node", "dist/index.js"]
+USER 1000
+
+ENTRYPOINT ["node", "dist/cli.js"]

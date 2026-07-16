@@ -3,11 +3,12 @@
  * Provides clear, focused error messages that identify the root cause
  */
 
+import { parseSearxngUrls, validateSearxngInstanceUrl } from "./searxng-instances.js";
+
 export interface ErrorContext {
   url?: string;
   searxngUrl?: string;
   proxyAgent?: boolean;
-  username?: string;
   timeout?: number;
   query?: string;
 }
@@ -109,12 +110,12 @@ export function createServerError(status: number, statusText: string, responseBo
   return new MCPSearXNGError(`🚫 ${target} Error (${status}): ${statusText}`);
 }
 
-export function createJSONError(responseText: string, context: ErrorContext): MCPSearXNGError {
+export function createJSONError(responseText: string): MCPSearXNGError {
   const preview = responseText.substring(0, 100).replace(/\n/g, ' ');
-  return new MCPSearXNGError(`🔍 SearXNG Response Error: Invalid JSON format. Response: "${preview}..."`);
+  return new MCPSearXNGError(`🔍 SearXNG Response Error: Invalid JSON format. Response: "${preview}...". Enable - json under search.formats in your SearXNG settings.yml, or set SEARXNG_HTML_FALLBACK=true.`);
 }
 
-export function createDataError(data: any, context: ErrorContext): MCPSearXNGError {
+export function createDataError(): MCPSearXNGError {
   return new MCPSearXNGError(`🔍 SearXNG Data Error: Missing results array in response`);
 }
 
@@ -137,7 +138,7 @@ export function createContentError(message: string, url: string): MCPSearXNGErro
   return new MCPSearXNGError(`📄 Content Error: ${message} (${url})`);
 }
 
-export function createConversionError(error: any, url: string, htmlContent: string): MCPSearXNGError {
+export function createConversionError(url: string): MCPSearXNGError {
   return new MCPSearXNGError(`🔄 Conversion Error: Cannot convert HTML to Markdown (${url})`);
 }
 
@@ -146,7 +147,7 @@ export function createTimeoutError(timeout: number, url: string): MCPSearXNGErro
   return new MCPSearXNGError(`⏱️ Timeout Error: ${hostname} took longer than ${timeout}ms to respond`);
 }
 
-export function createEmptyContentWarning(url: string, htmlLength: number, htmlPreview: string): string {
+export function createEmptyContentWarning(url: string): string {
   return `📄 Content Warning: Page fetched but appears empty after conversion (${url}). May contain only media or require JavaScript.`;
 }
 
@@ -154,20 +155,35 @@ export function createUnexpectedError(error: any, context: ErrorContext): MCPSea
   return new MCPSearXNGError(`❓ Unexpected Error: ${error.message || String(error)}`);
 }
 
+/**
+ * Process-level crash handlers, registered by the CLI entrypoint (cli.ts).
+ *
+ * Extracted here so the logic is unit-testable: cli.ts calls main() at import
+ * time (it must always start the server — see issue #91), so it cannot be
+ * imported to test these in place.
+ */
+export function handleUncaughtException(error: unknown): void {
+  console.error('Uncaught Exception:', error);
+  process.exit(1);
+}
+
+export function handleUnhandledRejection(reason: unknown, promise: Promise<unknown>): void {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
+}
+
 export function validateEnvironment(): string | null {
   const issues: string[] = [];
   
-  const searxngUrl = process.env.SEARXNG_URL;
-  if (!searxngUrl) {
+  const searxngUrls = parseSearxngUrls();
+  if (searxngUrls.length === 0) {
     issues.push("SEARXNG_URL not set");
   } else {
-    try {
-      const url = new URL(searxngUrl);
-      if (!['http:', 'https:'].includes(url.protocol)) {
-        issues.push(`SEARXNG_URL invalid protocol: ${url.protocol}`);
+    for (const searxngUrl of searxngUrls) {
+      const validationError = validateSearxngInstanceUrl(searxngUrl);
+      if (validationError) {
+        issues.push(validationError);
       }
-    } catch (error) {
-      issues.push(`SEARXNG_URL invalid format: ${searxngUrl}`);
     }
   }
 

@@ -60,28 +60,28 @@ function getMeta(doc: Document, name: string): string | undefined {
 export function extractMetadata(html: string, url: string): PageMetadata {
   const { document } = parseHTML(html);
 
-  const title = getMeta(doc, "og:title")
-    || getMeta(doc, "twitter:title")
-    || doc.querySelector("title")?.textContent?.trim()
+  const title = getMeta(document, "og:title")
+    || getMeta(document, "twitter:title")
+    || document.querySelector("title")?.textContent?.trim()
     || undefined;
 
-  const author = getMeta(doc, "author")
-    || getMeta(doc, "article:author")
-    || getMeta(doc, "og:article:author")
+  const author = getMeta(document, "author")
+    || getMeta(document, "article:author")
+    || getMeta(document, "og:article:author")
     || undefined;
 
-  const publishedDate = getMeta(doc, "article:published_time")
-    || getMeta(doc, "og:article:published_time")
-    || getMeta(doc, "date")
-    || getMeta(doc, "pubdate")
+  const publishedDate = getMeta(document, "article:published_time")
+    || getMeta(document, "og:article:published_time")
+    || getMeta(document, "date")
+    || getMeta(document, "pubdate")
     || undefined;
 
-  const description = getMeta(doc, "description")
-    || getMeta(doc, "og:description")
-    || getMeta(doc, "twitter:description")
+  const description = getMeta(document, "description")
+    || getMeta(document, "og:description")
+    || getMeta(document, "twitter:description")
     || undefined;
 
-  const siteName = getMeta(doc, "og:site_name")
+  const siteName = getMeta(document, "og:site_name")
     || undefined;
 
   const result: PageMetadata = {};

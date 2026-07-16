@@ -2,8 +2,6 @@ import express from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { randomUUID } from "crypto";
-import { IncomingMessage, ServerResponse } from "http";
-import { Socket } from "net";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
@@ -177,62 +175,25 @@ export async function createHttpServer(
       // Connect this session's McpServer to its transport
       await mcpServer.connect(transport);
     } else {
-      // Auto-create session for stateless clients (e.g., OpenCode's
-      // type: "remote" which doesn't preserve session IDs).
-      // Create a sessionful transport and initialize it silently via
-      // a mock request/response pair so the transport has a valid
-      // session for subsequent non-initialize requests.
-      mcpServer = createMcpServer();
-      const newSessionId = randomUUID();
-
-      transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => newSessionId,
-        onsessioninitialized: (sessionId) => {
-          sessions.set(sessionId, { transport, mcpServer });
-          logMessage(mcpServer, "debug", `Session auto-created: ${sessionId}`);
-        },
-        enableDnsRebindingProtection: security.enableDnsRebindingProtection,
-        allowedHosts: security.allowedHosts,
-        allowedOrigins: security.allowedOrigins,
+      // Invalid request
+      console.warn(`⚠️  POST request rejected - invalid request:`, {
+        clientIP: req.ip || req.socket.remoteAddress,
+        sessionId: sessionId || 'undefined',
+        hasInitializeRequest: isInitializeRequest(req.body),
+        userAgent: req.headers['user-agent'],
+        contentType: req.headers['content-type'],
+        accept: req.headers['accept']
       });
-
-      transport.onclose = () => {
-        if (transport.sessionId) {
-          sessions.delete(transport.sessionId);
-        }
-      };
-
-      await mcpServer.connect(transport);
-
-      // Silently initialize via mock so handleRequest has a session
-      const mockSocket = new Socket();
-      const mockReq = new IncomingMessage(mockSocket);
-      mockReq.method = "POST";
-      mockReq.headers = {
-        "content-type": "application/json",
-        "accept": "application/json, text/event-stream",
-      };
-      const mockRes = new ServerResponse(mockReq);
-      const initBody = {
-        jsonrpc: "2.0",
-        id: 0,
-        method: "initialize",
-        params: {
-          protocolVersion: "2024-11-05",
-          capabilities: {},
-          clientInfo: { name: "auto", version: "1.0" },
+      const sessionNotFound = Boolean(sessionId);
+      res.status(sessionNotFound ? 404 : 400).json({
+        jsonrpc: '2.0',
+        error: {
+          code: sessionNotFound ? -32001 : -32000,
+          message: sessionNotFound ? 'Session not found' : 'Bad Request: No valid session ID provided',
         },
-      };
-      try {
-        await transport.handleRequest(mockReq, mockRes, initBody);
-      } catch {
-        // Ignore mock init errors
-      }
-
-      // Now the transport has sessionId set, add it to the real request
-      if (transport.sessionId) {
-        req.headers["mcp-session-id"] = transport.sessionId;
-      }
+        id: null,
+      });
+      return;
     }
 
     // Handle the request

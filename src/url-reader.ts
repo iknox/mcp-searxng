@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Readability } from "@mozilla/readability";
-import { JSDOM } from "jsdom";
+import { parseHTML } from "linkedom";
 import { NodeHtmlMarkdown } from "node-html-markdown";
 import { fetch as undiciFetch, type Dispatcher } from "undici";
 import { createProxyAgent, createUrlReaderAgent, ProxyType } from "./proxy.js";
@@ -43,8 +43,8 @@ type BoundedBodyReadResult =
   | { exceeded: true; bytesRead: number };
 
 export function extractMainContent(html: string, url: string): string | null {
-  const doc = new JSDOM(html, { url });
-  const reader = new Readability(doc.window.document);
+  const { document } = parseHTML(html);
+  const reader = new Readability(document);
   const article = reader.parse();
   if (!article?.content) {
     return null;
@@ -58,7 +58,7 @@ function getMeta(doc: Document, name: string): string | undefined {
 }
 
 export function extractMetadata(html: string, url: string): PageMetadata {
-  const doc = new JSDOM(html, { url }).window.document;
+  const { document } = parseHTML(html);
 
   const title = getMeta(doc, "og:title")
     || getMeta(doc, "twitter:title")

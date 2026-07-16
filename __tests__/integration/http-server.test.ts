@@ -161,11 +161,10 @@ async function runTests() {
       .set('Accept', 'application/json, text/event-stream')
       .send({ jsonrpc: '2.0', method: 'tools/list', id: 1 });
 
-    // Auto-created session -> accepts the request and returns a session ID
+    // Stateless mode: accepts request, returns result, no session ID
     assert.equal(res.status, 200);
-    assert.ok(res.body.result, 'Expected successful response from auto-created session');
+    assert.ok(res.body.result, 'Expected successful response from stateless transport');
     assert.ok(Array.isArray(res.body.result?.tools), 'Expected tools list');
-    assert.ok(res.headers['mcp-session-id'], 'Expected auto-generated session ID');
   }, results);
 
   await testFunction('POST /mcp with unknown sessionId auto-creates new session', async () => {
@@ -178,12 +177,9 @@ async function runTests() {
       .set('mcp-session-id', 'unknown-session-abc')
       .send({ jsonrpc: '2.0', method: 'tools/list', id: 1 });
 
-    // Auto-created session -> accepts the request
+    // Stateless mode: accepts request regardless of session header
     assert.equal(res.status, 200);
-    assert.ok(res.body.result, 'Expected successful response from auto-created session');
-    assert.ok(res.headers['mcp-session-id'], 'Expected auto-generated session ID');
-    // Should get a new session ID, not the stale one
-    assert.notEqual(res.headers['mcp-session-id'], 'unknown-session-abc');
+    assert.ok(res.body.result, 'Expected successful response from stateless transport');
   }, results);
 
   await testFunction('GET /mcp without sessionId returns 400', async () => {

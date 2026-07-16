@@ -177,10 +177,14 @@ export async function createHttpServer(
     } else {
       // Auto-create session for stateless clients (e.g., OpenCode's
       // type: "remote" which doesn't preserve session IDs).
+      // The SDK transport requires _sessionId + header mcp-session-id
+      // to match for non-initialize requests, so we set both before
+      // calling handleRequest.
+      const newSessionId = randomUUID();
       mcpServer = createMcpServer();
 
       transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
+        sessionIdGenerator: () => newSessionId,
         onsessioninitialized: (sessionId) => {
           sessions.set(sessionId, { transport, mcpServer });
           logMessage(mcpServer, "debug", `Session auto-created: ${sessionId}`);
@@ -197,6 +201,12 @@ export async function createHttpServer(
       };
 
       await mcpServer.connect(transport);
+
+      // Pre-register the session and manually set transport state so
+      // handleRequest finds a valid session for non-initialize messages.
+      sessions.set(newSessionId, { transport, mcpServer });
+      (transport as any)._sessionId = newSessionId;
+      req.headers['mcp-session-id'] = newSessionId;
     }
 
     // Handle the request

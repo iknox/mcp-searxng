@@ -2,6 +2,8 @@
 
 We welcome contributions! Follow these guidelines to get started.
 
+Please read and follow the [Code of Conduct](CODE_OF_CONDUCT.md) when participating in this project.
+
 ## Getting Started
 
 ```bash
@@ -24,9 +26,9 @@ npm run build   # One-off build
 - Follow existing error handling patterns
 - Write concise, informative error messages
 - Include unit tests for new functionality
-- Maintain 80%+ test coverage
-- Test with MCP inspector before submitting
-- Run evals to verify functionality
+- Keep coverage above the enforced gate — **90% lines, 85% branches** (CI runs `npm run test:coverage` and fails below it)
+- Run `npm run lint` (or `npm run security` for lint + dependency audit) before submitting
+- Test with the MCP inspector (`npm run inspector`) before submitting
 
 ## Testing
 

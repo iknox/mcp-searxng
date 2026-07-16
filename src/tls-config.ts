@@ -13,29 +13,81 @@ const CA_BUNDLE_PATHS = [
 ];
 
 /**
- * Reads system CA certificates from well-known bundle paths.
- * Returns null on Windows (no universal file path) or if no bundle is found.
+ * Injectable dependencies for {@link getSystemCACerts}.
  *
- * On Windows, users should set NODE_EXTRA_CA_CERTS pointing to a PEM file.
+ * These exist purely as a test seam: production callers pass nothing and the
+ * real platform / filesystem are used. Tests override them to exercise branches
+ * (e.g. Windows, unreadable bundles) deterministically on any host.
  */
-export function getSystemCACerts(): string | null {
-  // Windows has no universal CA bundle path; skip auto-detection
-  if (platform === "win32") {
-    return null;
-  }
+export interface CACertDeps {
+  platformName?: NodeJS.Platform;
+  fileExists?: (path: string) => boolean;
+  readFile?: (path: string) => string;
+  caPaths?: readonly string[];
+  /**
+   * Path to an extra PEM bundle to merge into the CA list. Defaults to
+   * `process.env.NODE_EXTRA_CA_CERTS`. Pass `null` in tests to opt out.
+   */
+  extraCaPath?: string | null;
+}
 
-  for (const caPath of CA_BUNDLE_PATHS) {
-    if (existsSync(caPath)) {
-      try {
-        return readFileSync(caPath, "utf8");
-      } catch {
-        // File exists but is unreadable (permissions); try next
-        continue;
+/**
+ * Reads system CA certificates from well-known bundle paths, plus an optional
+ * user-provided extra bundle pointed to by `NODE_EXTRA_CA_CERTS`.
+ *
+ * On Windows (and on any platform where no system bundle is found) this
+ * returns `null`, so callers pass no explicit `ca` to undici and Node's
+ * default trust store — Mozilla roots plus `NODE_EXTRA_CA_CERTS` — is used.
+ * This is intentional: passing an explicit `connect.ca` *replaces* the
+ * default trust store entirely, which would drop both the Mozilla roots and
+ * the extra CA unless we re-merged them ourselves.
+ *
+ * On Linux/macOS when a system bundle *is* found, the system bundle is
+ * returned with the extra bundle appended. Here an explicit `ca` is already
+ * being set (overriding the default path), so folding in the extra bundle is
+ * required to keep `NODE_EXTRA_CA_CERTS` honored in that case.
+ */
+export function getSystemCACerts(deps: CACertDeps = {}): string | null {
+  const {
+    platformName = platform,
+    fileExists = existsSync,
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
+    readFile = (path: string) => readFileSync(path, "utf8"),
+    caPaths = CA_BUNDLE_PATHS,
+    extraCaPath = process.env.NODE_EXTRA_CA_CERTS,
+  } = deps;
+
+  const bundles: string[] = [];
+
+  // Windows has no universal CA bundle path; skip auto-detection. Node's
+  // default trust store (Mozilla + NODE_EXTRA_CA_CERTS) handles Windows.
+  if (platformName !== "win32") {
+    for (const caPath of caPaths) {
+      if (fileExists(caPath)) {
+        try {
+          bundles.push(readFile(caPath));
+          break; // first readable bundle wins, matching prior behavior
+        } catch {
+          // File exists but is unreadable (permissions); try next
+          continue;
+        }
       }
     }
   }
 
-  return null;
+  // Only fold in the extra CA when a system bundle already forces an explicit
+  // `ca` override. If no system bundle was found, returning `null` here lets
+  // Node's default trust store — which already includes NODE_EXTRA_CA_CERTS —
+  // handle validation, instead of replacing it with the extra CA alone.
+  if (extraCaPath && bundles.length > 0) {
+    try {
+      bundles.push(readFile(extraCaPath));
+    } catch {
+      // Unreadable extra path is silently ignored — same as Node's behavior.
+    }
+  }
+
+  return bundles.length > 0 ? bundles.join("\n") : null;
 }
 
 /**
@@ -47,7 +99,7 @@ export function getSystemCACerts(): string | null {
  *   new Agent({ connect: getConnectOptions() })
  *   new ProxyAgent({ uri: proxyUrl, connect: getConnectOptions() })
  */
-export function getConnectOptions(): { ca: string } | Record<string, never> {
-  const ca = getSystemCACerts();
+export function getConnectOptions(deps: CACertDeps = {}): { ca: string } | Record<string, never> {
+  const ca = getSystemCACerts(deps);
   return ca !== null ? { ca } : {};
 }

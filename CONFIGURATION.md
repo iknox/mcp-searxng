@@ -6,21 +6,93 @@ All environment variables for `mcp-searxng`, organized by concern. All variables
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `SEARXNG_URL` | Yes | — | URL of your SearXNG instance. Format: `<protocol>://<hostname>[:<port>]` (e.g. `http://localhost:8080`) |
+| `SEARXNG_URL` | Yes | — | URL of your SearXNG instance, or a semicolon-separated list of interchangeable replica base URLs. Single URL behavior is unchanged. Format: `<protocol>://[username[:password]@]<hostname>[:<port>][/path]` (e.g. `http://localhost:8080`, `https://user:pass@search.example.com`, `https://searx.example.com/searxng`, or `https://user:pass@one.example.com;https://two.example.com`) |
+| `SEARXNG_FANOUT` | No | `false` | Set to `true` to query all healthy configured SearXNG instances in parallel and merge results. Default failover mode tries instances in order until one returns results. |
+
+When `SEARXNG_URL` contains multiple semicolon-separated URLs, they are treated as interchangeable replicas. Default mode fails over in order when an instance hard-fails or returns no results. A reachable `200 OK` response with an empty `results` array is considered healthy and does not trigger cooldown. Instances with 3 consecutive hard failures are skipped for 60 seconds.
+
+With `SEARXNG_FANOUT=true`, all healthy instances are queried in parallel. Results are deduplicated by canonical URL, the copy with the highest `score` is kept, and merged results are ordered by descending score. Capability discovery and filter guidance aggregate `/config` data from all reachable configured instances; `common` categories/engines work everywhere reachable, while `available` values are best-effort. A `/config` endpoint that fails is skipped for about 60 seconds before retry, or retried immediately when `searxng_instance_info` is called with `refresh=true`. Search suggestions use the first configured instance.
 
 ## Authentication
 
+For SearXNG instances protected with HTTP Basic Auth, embed credentials in each `SEARXNG_URL` entry:
+
+```bash
+SEARXNG_URL=https://username:password@search.example.com
+```
+
+For multiple interchangeable replicas, each semicolon-separated URL can carry its own credentials. This supports mixed deployments such as one private auth-gated instance and one public instance without sending the private credentials to the public host:
+
+```bash
+SEARXNG_URL=https://alice:secret@private-search.example.com;https://public-search.example.com
+```
+
+Percent-encode special characters in usernames or passwords before placing them in the URL. For example, password `p@ss` should be written as `p%40ss`.
+
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `AUTH_USERNAME` | No | — | HTTP Basic Auth username for password-protected SearXNG instances |
-| `AUTH_PASSWORD` | No | — | HTTP Basic Auth password for password-protected SearXNG instances |
+| `AUTH_USERNAME` | No | — | Legacy global HTTP Basic Auth username fallback used only when a `SEARXNG_URL` entry has no userinfo |
+| `AUTH_PASSWORD` | No | — | Legacy global HTTP Basic Auth password fallback used only when a `SEARXNG_URL` entry has no userinfo |
+
+## Timeouts
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `SEARXNG_TIMEOUT_MS` | No | `10000` | Maximum time in milliseconds to wait for a SearXNG search response. The request is aborted and a network error is returned if the server does not respond within this window. Invalid, non-positive, or out-of-range values (above `2147483647`) fall back to the default. |
+| `FETCH_TIMEOUT_MS` | No | `10000` | Maximum time in milliseconds to wait for a `web_url_read` fetch. The request is aborted and an error is returned if the server does not respond within this window. |
+
+## Tool Schema
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `SEARXNG_LITE_TOOLS` | No | `false` | Set to `true` to register minimal tool schemas with only `query` / `url` parameters. Reduces per-call token overhead for local models with small context windows. Extra parameters (e.g. `language`, `maxLength`) passed by the caller are still accepted and forwarded. |
+
+## Search Defaults
+
+Operator-level defaults applied when the caller omits the corresponding per-call parameter.
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `SEARXNG_DEFAULT_LANGUAGE` | No | `all` | Default language for all searches when `language` is not passed per call (e.g. `en`, `fr`, `de`). |
+| `SEARXNG_DEFAULT_SAFESEARCH` | No | — | Default safe-search level: `0` (off), `1` (moderate), `2` (strict). Invalid values are ignored with a warning. When unset, the SearXNG instance default applies. |
+
+## Search Result Controls
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `SEARXNG_MAX_RESULTS` | No | — | Operator-level maximum number of search results to return per call (1-20). Invalid values are ignored. Recommended: `10` for smaller context windows. |
+| `SEARXNG_MAX_RESULT_CHARS` | No | — | Maximum characters to include in each search result snippet. Longer snippets are truncated and marked with `…`. Invalid values are ignored. Recommended: `500` for smaller context windows. |
+| `SEARCH_CACHE_TTL_MS` | No | `86400000` | Search result cache TTL in milliseconds. Invalid or non-positive values fall back to the default (24 hours). |
+| `SEARCH_CACHE_MAX_ENTRIES` | No | `200` | Maximum number of cached search queries. When the cache exceeds this size, the least frequently used entry is evicted, with oldest entry used as the tie-breaker. Invalid or non-positive values fall back to the default. |
+
+Search results are cached in memory per process only; cache contents are not persisted across restarts. Cached text responses are marked with `_Cached result_`. Cached JSON responses remain parseable and include a top-level `"cached": true` field.
+
+## Search Compatibility
+
+Self-hosting SearXNG with JSON output enabled remains the recommended setup. The HTML fallback is best-effort for public instances that reject `format=json`; HTML theme differences may limit parsed metadata.
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `SEARXNG_HTML_FALLBACK` | No | `false` | Set to `true` to retry 403/404 or non-JSON search responses as an HTML search page and parse title, URL, and snippet only. HTML fallback results are marked with `sourceFormat: "html"` in JSON output. |
+
+## URL Reader Controls
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `URL_READ_MAX_CHARS` | No | — | Default maximum characters returned by `web_url_read` when the caller omits `maxLength`. Explicit `maxLength` always wins. Invalid values are ignored. |
+| `URL_READ_MAX_CONTENT_LENGTH_BYTES` | No | `5242880` | Maximum decompressed response-body bytes `web_url_read` will read while streaming a page. A HEAD `Content-Length` preflight may reject oversized pages before GET, but the streaming cap is authoritative. Invalid values fall back to the default. |
+| `CACHE_TTL_MS` | No | `86400000` | URL cache TTL in milliseconds. Invalid or non-positive values fall back to the default (24 hours). |
+| `CACHE_MAX_ENTRIES` | No | `500` | Maximum number of cached URLs. When the cache exceeds this size, the least frequently used entry is evicted, with oldest entry used as the tie-breaker. Invalid or non-positive values fall back to the default. |
 
 ## User-Agent
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `USER_AGENT` | No | — | Global User-Agent header for all outgoing requests (e.g. `MyBot/1.0`) |
-| `URL_READER_USER_AGENT` | No | — | User-Agent for `web_url_read` only — overrides `USER_AGENT` for URL reads |
+| `USER_AGENT` | No | — | Global default User-Agent header for outgoing requests (e.g. `MyBot/1.0`) |
+| `SEARCH_USER_AGENT` | No | `USER_AGENT` | User-Agent for SearXNG instance requests: `searxng_web_search`, `/config` capability discovery, and search suggestions |
+| `URL_READER_USER_AGENT` | No | `USER_AGENT` | User-Agent for `web_url_read` only |
+
+`SEARCH_USER_AGENT` and `URL_READER_USER_AGENT` are per-group overrides. When unset, both fall back to `USER_AGENT`. If neither the group override nor `USER_AGENT` is set, no User-Agent header is added by `mcp-searxng`.
 
 ## Proxy
 
@@ -33,6 +105,39 @@ Interface-specific proxies take priority over global proxies for their respectiv
 | `URL_READER_HTTP_PROXY` / `URL_READER_HTTPS_PROXY` | No | — | Proxy for `web_url_read` only |
 | `NO_PROXY` | No | — | Comma-separated bypass list (e.g. `localhost,.internal,example.com`) |
 
+## TLS / Corporate CA
+
+Proxy variables route traffic through a proxy. Corporate TLS inspection is a separate trust problem: the proxy re-signs upstream certificates, so Node.js must trust the proxy's root CA.
+
+On Linux and macOS, `mcp-searxng` auto-detects the first readable system CA bundle from these paths:
+
+- `/etc/ssl/certs/ca-certificates.crt` — Debian/Ubuntu/WSL2
+- `/etc/pki/tls/certs/ca-bundle.crt` — RHEL/CentOS/Fedora
+- `/etc/ssl/ca-bundle.pem` — OpenSUSE
+- `/etc/ssl/cert.pem` — Alpine, macOS
+
+If your deployment needs an additional corporate CA, set the standard Node.js `NODE_EXTRA_CA_CERTS` environment variable to a PEM file. This is a Node.js TLS setting, not an `mcp-searxng` configuration variable.
+
+Windows has no universal CA bundle file path, so system CA auto-detection is skipped. If you are behind a TLS-inspecting corporate proxy (for example Zscaler, Netskope, Palo Alto, or Blue Coat) and see errors such as `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` or `self signed certificate in certificate chain`, export the proxy root CA to PEM and point `NODE_EXTRA_CA_CERTS` at it.
+
+```powershell
+# Export from Windows cert store (adjust the subject match to your proxy CA):
+$cert = Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Subject -match "YourCorp" } | Select-Object -First 1
+[System.IO.File]::WriteAllBytes("$env:USERPROFILE\corp-ca.cer", $cert.RawData)
+certutil -encode "$env:USERPROFILE\corp-ca.cer" "$env:USERPROFILE\corp-ca.pem"
+```
+
+Example MCP client environment block:
+
+```json
+"env": {
+  "SEARXNG_URL": "https://searxng.example.com",
+  "NODE_EXTRA_CA_CERTS": "C:\\Users\\you\\corp-ca.pem"
+}
+```
+
+Never set `NODE_TLS_REJECT_UNAUTHORIZED=0`. It disables all TLS certificate validation for the Node.js process and makes HTTPS connections vulnerable to interception.
+
 ## HTTP Transport
 
 By default the server communicates over STDIO. Set `MCP_HTTP_PORT` to enable HTTP mode instead.
@@ -40,10 +145,30 @@ By default the server communicates over STDIO. Set `MCP_HTTP_PORT` to enable HTT
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `MCP_HTTP_PORT` | No | — | Port number to enable HTTP transport (e.g. `3000`) |
+| `MCP_HTTP_HOST` | No | `127.0.0.1` | Interface address to bind to. Defaults to localhost-only for security. Set `0.0.0.0` for all interfaces (required for Docker and remote deployments), or a specific IP. Works in pair with `MCP_HTTP_PORT` only. **Breaking change from v1.2.1:** previous default was `0.0.0.0`. |
+| `MCP_HTTP_TRUST_PROXY` | No | `false` | Express `trust proxy` setting for deployments behind a trusted reverse proxy. Use `true`, a trusted hop count such as `1`, or a proxy subnet/preset such as `loopback` or `10.0.0.0/8`. Unset, `false`, or `0` disables it (the secure default). |
 
 **HTTP endpoints (when HTTP mode is active):**
 - `POST/GET/DELETE /mcp` — MCP protocol
 - `GET /health` — health check
+
+HTTP sessions are stored in memory per process. A stale or unknown `mcp-session-id` on a non-initialize `POST /mcp` receives HTTP 404 with JSON-RPC error code `-32001` and message `"Session not found"`. Clients should recover by running `initialize` again; initialize requests are accepted even when they still carry a stale session header.
+
+## Rate Limiting (HTTP mode)
+
+Rate limiting is always active in HTTP mode to prevent resource exhaustion. Two separate limits protect different request types. A non-numeric or non-positive value for any `MCP_RATE_*` variable is ignored with a startup warning and the documented default is used, so a typo cannot silently disable rate limiting. (A blank or unset variable uses the default silently.)
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `MCP_RATE_WINDOW_MS` | No | `60000` | Sliding window duration in milliseconds for all rate limits |
+| `MCP_RATE_INIT_MAX` | No | `20` | Max POST `/mcp` requests per window (applied to all POSTs, guards against session-init flooding) |
+| `MCP_RATE_SESSION_MAX` | No | `300` | Max GET/DELETE `/mcp` requests per window (per-session calls; intentionally generous for AI agents) |
+
+Requests exceeding a limit receive HTTP 429 with a JSON-RPC error body (`code: -32029`). `/health` has a fixed limit of 60 requests per minute. Standard `RateLimit-*` headers are included on all responses.
+
+The in-memory store is per-process; for horizontally scaled deployments replace it with a shared Redis store via `express-rate-limit`'s `store` option.
+
+When HTTP mode runs behind a trusted reverse proxy, set `MCP_HTTP_TRUST_PROXY` so Express can resolve the client IP from proxy headers before rate-limit keys and request logs are computed. For a single trusted proxy hop, use `MCP_HTTP_TRUST_PROXY=1`. Leave it unset for direct exposure; enabling it without a trusted proxy lets clients spoof `X-Forwarded-For`. This setting is distinct from outbound `HTTP_PROXY` / `HTTPS_PROXY`, which control this server's requests to SearXNG or URLs.
 
 ## Hardened HTTP Mode
 
@@ -54,9 +179,25 @@ Opt-in security layer for when you expose the HTTP transport on a network. Defau
 | `MCP_HTTP_HARDEN` | No | `false` | Set to `true` to enable all hardening features |
 | `MCP_HTTP_AUTH_TOKEN` | No | — | Required bearer token for all HTTP requests in hardened mode |
 | `MCP_HTTP_ALLOWED_ORIGINS` | No | — | Comma-separated CORS origin allowlist (e.g. `https://app.example.com`) |
-| `MCP_HTTP_ALLOWED_HOSTS` | No | — | Comma-separated DNS rebinding protection allowlist override |
-| `MCP_HTTP_ALLOW_PRIVATE_URLS` | No | `false` | Allow `web_url_read` to fetch internal/private URLs in hardened mode |
+| `MCP_HTTP_ALLOWED_HOSTS` | No | `127.0.0.1`, `localhost`, `[::1]` (+ their `:PORT` forms) | Comma-separated DNS-rebinding allowlist. Entries are matched **exactly** against the request `Host` header, **including the port** (e.g. `app.example.com:8443`). Setting this replaces the default entirely. |
+| `MCP_HTTP_ALLOW_PRIVATE_URLS` | No | `false` | Allow `web_url_read` to fetch internal/private URLs, including hostnames that DNS-resolve to private/internal addresses. Private URL reads are blocked by default in all modes. |
 | `MCP_HTTP_EXPOSE_FULL_CONFIG` | No | `false` | Expose full config details in `/health` response (for debugging) |
+
+`MCP_HTTP_ALLOWED_HOSTS` is compared against the raw `Host` header, which includes the port. The default already covers loopback access on the configured `MCP_HTTP_PORT` (`127.0.0.1:PORT`, `localhost:PORT`, `[::1]:PORT`) plus the bare hostnames, which match a portless `Host` — a client or reverse proxy that omits the port (as on ports 80/443). When you set it explicitly, list the exact `Host` the client (or your reverse proxy) sends — e.g. `app.example.com` if the proxy forwards `Host: app.example.com` on 443, or `app.example.com:8443` if it forwards a port.
+
+## URL Reader Security
+
+`web_url_read` blocks private/internal URLs by default in all transport modes. This includes localhost, loopback addresses, private IPv4 ranges, link-local addresses, `0.0.0.0/8`, CGNAT (`100.64.0.0/10`), IANA special-purpose IPv4 ranges, IPv6 loopback/ULA/link-local addresses, and IPv4-mapped IPv6 private addresses.
+
+Redirects are also checked before they are followed. A public URL that redirects to a private/internal URL is blocked.
+
+For direct URL-reader requests without a proxy, DNS answers are validated before connecting. A public-looking hostname that resolves to a private/internal address is blocked, and the connection is pinned to the validated DNS answer to prevent DNS rebinding between validation and connection.
+
+When a URL-reader proxy is configured (`URL_READER_HTTP_PROXY`, `URL_READER_HTTPS_PROXY`, `HTTP_PROXY`, or `HTTPS_PROXY`), the proxy performs DNS resolution. Client-side DNS-answer validation cannot inspect proxied resolutions, so proxied deployments should rely on proxy, firewall, and egress controls.
+
+`URL_READ_MAX_CONTENT_LENGTH_BYTES` is enforced while streaming the response body, including chunked responses and responses whose GET body is larger than the HEAD `Content-Length` value. The limit is measured after transparent response decompression.
+
+Set `MCP_HTTP_ALLOW_PRIVATE_URLS=true` only when internal URL reads are intentional for your deployment. This also allows hostnames that DNS-resolve to private/internal addresses.
 
 
 ## Full Example (All Options)
@@ -70,10 +211,24 @@ Complete MCP client configuration with every variable. Mix and match as needed �
       "command": "npx",
       "args": ["-y", "mcp-searxng"],
       "env": {
-        "SEARXNG_URL": "YOUR_SEARXNG_INSTANCE_URL",
-        "AUTH_USERNAME": "your_username",
-        "AUTH_PASSWORD": "your_password",
+        "SEARXNG_URL": "https://your_username:your_password@searxng.example.com",
+        "SEARXNG_FANOUT": "false",
+        "SEARXNG_TIMEOUT_MS": "10000",
+        "FETCH_TIMEOUT_MS": "10000",
+        "SEARXNG_LITE_TOOLS": "false",
+        "SEARXNG_DEFAULT_LANGUAGE": "en",
+        "SEARXNG_DEFAULT_SAFESEARCH": "0",
+        "SEARXNG_MAX_RESULTS": "10",
+        "SEARXNG_MAX_RESULT_CHARS": "500",
+        "SEARCH_CACHE_TTL_MS": "86400000",
+        "SEARCH_CACHE_MAX_ENTRIES": "200",
+        "SEARXNG_HTML_FALLBACK": "false",
+        "URL_READ_MAX_CHARS": "2000",
+        "URL_READ_MAX_CONTENT_LENGTH_BYTES": "5242880",
+        "CACHE_TTL_MS": "86400000",
+        "CACHE_MAX_ENTRIES": "500",
         "USER_AGENT": "MyBot/1.0",
+        "SEARCH_USER_AGENT": "MySearchBot/1.0",
         "URL_READER_USER_AGENT": "Mozilla/5.0 (compatible; MyBot/1.0)",
         "SEARCH_HTTP_PROXY": "http://search-proxy.company.com:8080",
         "SEARCH_HTTPS_PROXY": "http://search-proxy.company.com:8080",
@@ -83,6 +238,8 @@ Complete MCP client configuration with every variable. Mix and match as needed �
         "HTTPS_PROXY": "http://global-proxy.company.com:8080",
         "NO_PROXY": "localhost,127.0.0.1,.local,.internal",
         "MCP_HTTP_PORT": "3000",
+        "MCP_HTTP_HOST": "0.0.0.0",
+        "MCP_HTTP_TRUST_PROXY": "1",
         "MCP_HTTP_HARDEN": "true",
         "MCP_HTTP_AUTH_TOKEN": "replace-me",
         "MCP_HTTP_ALLOWED_ORIGINS": "https://app.example.com",

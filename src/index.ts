@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -12,18 +10,29 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 // Import modularized functionality
-import { WEB_SEARCH_TOOL, READ_URL_TOOL, isSearXNGWebSearchArgs } from "./types.js";
+import {
+  WEB_SEARCH_TOOL,
+  SUGGESTIONS_TOOL,
+  INSTANCE_INFO_TOOL,
+  READ_URL_TOOL,
+  LITE_WEB_SEARCH_TOOL,
+  LITE_SUGGESTIONS_TOOL,
+  LITE_INSTANCE_INFO_TOOL,
+  LITE_READ_URL_TOOL,
+  isSearXNGWebSearchArgs,
+  isSearXNGSearchSuggestionsArgs,
+  isSearXNGInstanceInfoArgs,
+} from "./types.js";
 import { logMessage, setLogLevel, getCurrentLogLevel } from "./logging.js";
 import { performWebSearch } from "./search.js";
+import { performSearchSuggestions } from "./suggestions.js";
+import { fetchInstanceInfo } from "./instance-info.js";
 import { fetchAndConvertToMarkdown } from "./url-reader.js";
 import { createConfigResource, createHelpResource } from "./resources.js";
-import { createHttpServer } from "./http-server.js";
+import { createHttpServer, resolveBindHost } from "./http-server.js";
+import { getSearxngInstances } from "./searxng-instances.js";
 
-// Use a static version string that will be updated by the version script
-const packageVersion = "1.0.5";
-
-// Export the version for use in other modules
-export { packageVersion };
+import { packageVersion } from "./version.js";
 
 // Type guard for URL reading args
 export function isWebUrlReadArgs(args: unknown): args is {
@@ -77,6 +86,44 @@ export function isWebUrlReadArgs(args: unknown): args is {
   return true;
 }
 
+function getFetchTimeoutMs(mcpServer: McpServer): number {
+  const rawValue = process.env.FETCH_TIMEOUT_MS;
+  if (rawValue === undefined || rawValue.trim() === "") {
+    return 10000;
+  }
+
+  const parsed = parseInt(rawValue, 10);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    logMessage(
+      mcpServer,
+      "warning",
+      `Ignoring invalid FETCH_TIMEOUT_MS="${rawValue}". Expected a positive integer. Using default 10000.`,
+    );
+    return 10000;
+  }
+
+  return parsed;
+}
+
+function getDefaultUrlReadMaxChars(mcpServer: McpServer): number | undefined {
+  const rawValue = process.env.URL_READ_MAX_CHARS;
+  if (rawValue === undefined || rawValue.trim() === "") {
+    return undefined;
+  }
+
+  const parsed = parseInt(rawValue, 10);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    logMessage(
+      mcpServer,
+      "warning",
+      `Ignoring invalid URL_READ_MAX_CHARS="${rawValue}". Expected a positive integer.`,
+    );
+    return undefined;
+  }
+
+  return parsed;
+}
+
 /**
  * Creates and configures a new McpServer with all handlers registered.
  * Called once per HTTP session, or once for STDIO mode.
@@ -98,11 +145,17 @@ export function createMcpServer(): McpServer {
 
   const server = mcpServer.server;
 
+  const useLiteTools = process.env.SEARXNG_LITE_TOOLS === "true";
+  const searchTool = useLiteTools ? LITE_WEB_SEARCH_TOOL : WEB_SEARCH_TOOL;
+  const suggestionsTool = useLiteTools ? LITE_SUGGESTIONS_TOOL : SUGGESTIONS_TOOL;
+  const instanceInfoTool = useLiteTools ? LITE_INSTANCE_INFO_TOOL : INSTANCE_INFO_TOOL;
+  const readUrlTool = useLiteTools ? LITE_READ_URL_TOOL : READ_URL_TOOL;
+
   // List tools handler
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     logMessage(mcpServer, "debug", "Handling list_tools request");
     return {
-      tools: [WEB_SEARCH_TOOL, READ_URL_TOOL],
+      tools: [searchTool, suggestionsTool, instanceInfoTool, readUrlTool],
     };
   });
 
@@ -123,7 +176,52 @@ export function createMcpServer(): McpServer {
           args.pageno,
           args.time_range,
           args.language,
-          args.safesearch
+          args.safesearch === undefined ? undefined : Number(args.safesearch),
+          args.min_score,
+          args.num_results,
+          args.categories,
+          args.engines,
+          args.response_format,
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: result,
+            },
+          ],
+        };
+      } else if (name === "searxng_search_suggestions") {
+        if (!isSearXNGSearchSuggestionsArgs(args)) {
+          throw new Error("Invalid arguments for search suggestions");
+        }
+
+        const suggestions = await performSearchSuggestions(
+          mcpServer,
+          args.query,
+          args.language,
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ query: args.query, suggestions }, null, 2),
+            },
+          ],
+        };
+      } else if (name === "searxng_instance_info") {
+        if (!isSearXNGInstanceInfoArgs(args)) {
+          throw new Error("Invalid arguments for instance info");
+        }
+
+        const result = await fetchInstanceInfo(
+          mcpServer,
+          args.includeEngines,
+          args.includeDisabled,
+          args.category,
+          args.refresh,
         );
 
         return {
@@ -139,9 +237,10 @@ export function createMcpServer(): McpServer {
           throw new Error("Invalid arguments for URL reading");
         }
 
+        const defaultMaxLength = getDefaultUrlReadMaxChars(mcpServer);
         const paginationOptions = {
           startChar: args.startChar,
-          maxLength: args.maxLength,
+          maxLength: args.maxLength ?? defaultMaxLength,
           section: args.section,
           paragraphRange: args.paragraphRange,
           readHeadings: args.readHeadings,
@@ -149,7 +248,7 @@ export function createMcpServer(): McpServer {
           extractMetadata: args.extractMetadata,
         };
 
-        const result = await fetchAndConvertToMarkdown(mcpServer, args.url, 10000, paginationOptions);
+        const result = await fetchAndConvertToMarkdown(mcpServer, args.url, getFetchTimeoutMs(mcpServer), paginationOptions);
 
         return {
           content: [
@@ -245,7 +344,7 @@ export function createMcpServer(): McpServer {
 }
 
 // Main function
-async function main() {
+export async function main() {
   // Check for HTTP transport mode
   const httpPort = process.env.MCP_HTTP_PORT;
   if (httpPort) {
@@ -255,11 +354,13 @@ async function main() {
       process.exit(1);
     }
 
-    console.log(`Starting HTTP transport on port ${port}`);
-    const app = await createHttpServer(createMcpServer);
+    const host = resolveBindHost(process.env.MCP_HTTP_HOST);
+    console.log(`Starting HTTP transport on ${host}:${port}`);
+    const app = await createHttpServer(createMcpServer, port);
     
-    const httpServer = app.listen(port, () => {
-      console.log(`HTTP server listening on port ${port}`);
+    const httpServer = app.listen(port, host, () => {
+      console.log(`HTTP server listening on ${host}:${port}`);
+      // Health/MCP URLs shown as localhost for developer convenience
       console.log(`Health check: http://localhost:${port}/health`);
       console.log(`MCP endpoint: http://localhost:${port}/mcp`);
     });
@@ -282,8 +383,9 @@ async function main() {
     // Show helpful message when running in terminal
     if (process.stdin.isTTY) {
       console.error(`🔍 MCP SearXNG Server v${packageVersion} - Ready`);
-      if (process.env.SEARXNG_URL) {
-        console.error(`🌐 SearXNG URL: ${process.env.SEARXNG_URL}`);
+      const searxngInstances = getSearxngInstances();
+      if (searxngInstances.length > 0) {
+        console.error(`🌐 SearXNG URLs: ${searxngInstances.join("; ")}`);
       } else {
         console.error("⚠️  SEARXNG_URL not set — configure it before using search tools");
       }
@@ -297,23 +399,7 @@ async function main() {
     logMessage(mcpServer, "info", `MCP SearXNG Server v${packageVersion} connected via STDIO`);
     logMessage(mcpServer, "info", `Log level: ${getCurrentLogLevel()}`);
     logMessage(mcpServer, "info", `Environment: ${process.env.NODE_ENV || 'development'}`);
-    logMessage(mcpServer, "info", `SearXNG URL: ${process.env.SEARXNG_URL || 'not configured'}`);
+    const searxngInstances = getSearxngInstances();
+    logMessage(mcpServer, "info", `SearXNG URLs: ${searxngInstances.length > 0 ? searxngInstances.join("; ") : 'not configured'}`);
   }
 }
-
-// Handle uncaught errors
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  process.exit(1);
-});
-
-// Start the server (CLI entrypoint)
-main().catch((error) => {
-  console.error("Failed to start server:", error);
-  process.exit(1);
-});

@@ -175,25 +175,28 @@ export async function createHttpServer(
       // Connect this session's McpServer to its transport
       await mcpServer.connect(transport);
     } else {
-      // Invalid request
-      console.warn(`⚠️  POST request rejected - invalid request:`, {
-        clientIP: req.ip || req.socket.remoteAddress,
-        sessionId: sessionId || 'undefined',
-        hasInitializeRequest: isInitializeRequest(req.body),
-        userAgent: req.headers['user-agent'],
-        contentType: req.headers['content-type'],
-        accept: req.headers['accept']
-      });
-      const sessionNotFound = Boolean(sessionId);
-      res.status(sessionNotFound ? 404 : 400).json({
-        jsonrpc: '2.0',
-        error: {
-          code: sessionNotFound ? -32001 : -32000,
-          message: sessionNotFound ? 'Session not found' : 'Bad Request: No valid session ID provided',
+      // Auto-create session for stateless clients (e.g., OpenCode's
+      // type: "remote" which doesn't preserve session IDs).
+      mcpServer = createMcpServer();
+
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (sessionId) => {
+          sessions.set(sessionId, { transport, mcpServer });
+          logMessage(mcpServer, "debug", `Session auto-created: ${sessionId}`);
         },
-        id: null,
+        enableDnsRebindingProtection: security.enableDnsRebindingProtection,
+        allowedHosts: security.allowedHosts,
+        allowedOrigins: security.allowedOrigins,
       });
-      return;
+
+      transport.onclose = () => {
+        if (transport.sessionId) {
+          sessions.delete(transport.sessionId);
+        }
+      };
+
+      await mcpServer.connect(transport);
     }
 
     // Handle the request

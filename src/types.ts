@@ -362,6 +362,8 @@ export const READ_URL_TOOL: Tool = {
     "then call with section or paragraphRange to pull only the relevant parts. " +
     "This saves significant tokens on long pages. " +
     "Use a single full fetch only for short or unstructured pages. " +
+    "Converts HTML to Markdown; returns explicit JSON, plain text, YAML, TOML, and XML " +
+    "as readable Markdown. Binary media, archive, and PDF downloads are rejected. " +
     "By default, extracts the main article content using Mozilla Readability (strips navigation, sidebars, footers) " +
     "and prepends a YAML metadata block (title, author, publish date, description, site name). " +
     "Pages over 5MB are rejected early with a suggestion to use readHeadings or section instead.",

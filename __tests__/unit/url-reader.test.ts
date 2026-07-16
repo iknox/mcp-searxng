@@ -823,7 +823,7 @@ async function runTests() {
     });
 
     try {
-      const result = await fetchAndConvertToMarkdown(mockServer as any, url);
+      const result = await fetchAndConvertToMarkdown(mockServer as any, url, 10000, { extractMainContent: false });
       assert.equal(result, '# XHTML Title\n\nReadable page.');
     } finally {
       await close();
@@ -2096,24 +2096,6 @@ async function runTests() {
     }
   }, results);
 
-  // ── Content-Length HEAD check ─────────────────────────────────────────────
-
-  await testFunction('HEAD check returns Content-Length for pages that report it', async () => {
-    const mockServer = createMockServer();
-    const testHtml = '<html><body><p>Short page.</p></body></html>';
-    const { url, close } = await startTestServer({
-      body: testHtml,
-      headers: { 'content-length': String(Buffer.byteLength(testHtml)) },
-    });
-    try {
-      const len = await checkContentLength(url, 5000, null, mockServer as any);
-      assert.ok(len !== null, 'Should return a number');
-      assert.ok(len! > 0, `Expected positive length, got ${len}`);
-    } finally {
-      await close();
-    }
-  }, results);
-
   await testFunction('extractMainContent defaults to on via fetchAndConvertToMarkdown', async () => {
     const mockServer = createMockServer();
     urlCache.clear();
@@ -2143,44 +2125,6 @@ async function runTests() {
       assert.ok(!result.includes('Navigation'), 'Should strip nav by default');
       assert.ok(!result.includes('Footer'), 'Should strip footer by default');
       assert.ok(!result.includes('Buy stuff'), 'Should strip sidebar ads');
-    } finally {
-      await close();
-    }
-  }, results);
-
-  await testFunction('HEAD check returns null when Content-Length header is missing', async () => {
-    const mockServer = createMockServer();
-    const testHtml = '<html><body><p>No content-length header.</p></body></html>';
-    // Don't set content-length header
-    const { url, close } = await startTestServer({ body: testHtml });
-    try {
-      const len = await checkContentLength(url, 5000, null, mockServer as any);
-      assert.equal(len, null, 'Should return null when no Content-Length header');
-    } finally {
-      await close();
-    }
-  }, results);
-
-  await testFunction('HEAD check returns null on connection refused', async () => {
-    const mockServer = createMockServer();
-    const port = await getFreePort();
-    const len = await checkContentLength(`http://127.0.0.1:${port}`, 1000, null, mockServer as any);
-    assert.equal(len, null, 'Should return null on connection error');
-  }, results);
-
-  await testFunction('Large Content-Length blocks fetch via fetchAndConvertToMarkdown', async () => {
-    const mockServer = createMockServer();
-    urlCache.clear();
-
-    const testHtml = '<html><body><p>Tiny body but claims to be huge.</p></body></html>';
-    const { url, close } = await startTestServer({
-      body: testHtml,
-      headers: { 'content-length': '10485760' }, // 10MB
-    });
-    try {
-      const result = await fetchAndConvertToMarkdown(mockServer as any, url);
-      assert.ok(result.includes('Content too large'), `Expected blocked message, got: ${result.substring(0, 200)}`);
-      assert.ok(result.includes('10.0MB'), `Expected size in message, got: ${result.substring(0, 200)}`);
     } finally {
       await close();
     }

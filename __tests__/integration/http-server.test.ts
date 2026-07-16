@@ -152,7 +152,7 @@ async function runTests() {
     }
   }, results);
 
-  await testFunction('POST /mcp without sessionId and non-initialize body returns 400', async () => {
+  await testFunction('POST /mcp without sessionId auto-creates session for stateless clients', async () => {
     const app = await createHttpServer(() => createTestMcpServer());
 
     const res = await request(app)
@@ -160,14 +160,14 @@ async function runTests() {
       .set('Content-Type', 'application/json')
       .send({ jsonrpc: '2.0', method: 'tools/list', id: 1 });
 
-    assert.equal(res.status, 400);
-    assert.equal(res.body.jsonrpc, '2.0');
-    assert.ok(res.body.error);
-    assert.equal(res.body.error.code, -32000);
-    assert.equal(res.body.error.message, 'Bad Request: No valid session ID provided');
+    // Auto-created session -> accepts the request and returns a session ID
+    assert.equal(res.status, 200);
+    assert.ok(res.body.result, 'Expected successful response from auto-created session');
+    assert.ok(Array.isArray(res.body.result?.tools), 'Expected tools list');
+    assert.ok(res.headers['mcp-session-id'], 'Expected auto-generated session ID');
   }, results);
 
-  await testFunction('POST /mcp with unknown sessionId and non-initialize body returns 404 Session not found', async () => {
+  await testFunction('POST /mcp with unknown sessionId auto-creates new session', async () => {
     const app = await createHttpServer(() => createTestMcpServer());
 
     const res = await request(app)
@@ -176,11 +176,12 @@ async function runTests() {
       .set('mcp-session-id', 'unknown-session-abc')
       .send({ jsonrpc: '2.0', method: 'tools/list', id: 1 });
 
-    assert.equal(res.status, 404);
-    assert.equal(res.body.jsonrpc, '2.0');
-    assert.ok(res.body.error);
-    assert.equal(res.body.error.code, -32001);
-    assert.equal(res.body.error.message, 'Session not found');
+    // Auto-created session -> accepts the request
+    assert.equal(res.status, 200);
+    assert.ok(res.body.result, 'Expected successful response from auto-created session');
+    assert.ok(res.headers['mcp-session-id'], 'Expected auto-generated session ID');
+    // Should get a new session ID, not the stale one
+    assert.notEqual(res.headers['mcp-session-id'], 'unknown-session-abc');
   }, results);
 
   await testFunction('GET /mcp without sessionId returns 400', async () => {
@@ -434,7 +435,7 @@ async function runTests() {
     assert.equal(listRes.status, 200, 'follow-up request should succeed on existing session');
   }, results);
 
-  await testFunction('session cleanup: DELETE removes session so subsequent requests fail', async () => {
+  await testFunction('session cleanup: DELETE removes session then auto-creates on next request', async () => {
     const app = await createHttpServer(() => createTestMcpServer());
 
     const initRes = await request(app)
@@ -461,9 +462,9 @@ async function runTests() {
       .set('Accept', 'application/json, text/event-stream')
       .set('mcp-session-id', sessionId)
       .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
-    assert.equal(postRes.status, 404, 'request after DELETE should be rejected');
-    assert.equal(postRes.body.error.code, -32001);
-    assert.equal(postRes.body.error.message, 'Session not found');
+    // After DELETE, a new session is auto-created for stateless behavior
+    assert.equal(postRes.status, 200, 'request after DELETE should auto-create new session');
+    assert.ok(postRes.body.result, 'Expected successful response from auto-created session');
   }, results);
 
   // --- Rate Limiting ---

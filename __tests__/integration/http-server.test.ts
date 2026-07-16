@@ -158,6 +158,7 @@ async function runTests() {
     const res = await request(app)
       .post('/mcp')
       .set('Content-Type', 'application/json')
+      .set('Accept', 'application/json, text/event-stream')
       .send({ jsonrpc: '2.0', method: 'tools/list', id: 1 });
 
     // Auto-created session -> accepts the request and returns a session ID
@@ -173,6 +174,7 @@ async function runTests() {
     const res = await request(app)
       .post('/mcp')
       .set('Content-Type', 'application/json')
+      .set('Accept', 'application/json, text/event-stream')
       .set('mcp-session-id', 'unknown-session-abc')
       .send({ jsonrpc: '2.0', method: 'tools/list', id: 1 });
 
@@ -456,15 +458,15 @@ async function runTests() {
       .set('mcp-session-id', sessionId);
     assert.equal(deleteRes.status, 200, 'DELETE should succeed for existing session');
 
+    // After DELETE, a stateless request (no sessionId) auto-creates a new session
     const postRes = await request(app)
       .post('/mcp')
       .set('Content-Type', 'application/json')
       .set('Accept', 'application/json, text/event-stream')
-      .set('mcp-session-id', sessionId)
       .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
-    // After DELETE, a new session is auto-created for stateless behavior
-    assert.equal(postRes.status, 200, 'request after DELETE should auto-create new session');
+    assert.equal(postRes.status, 200, 'DELETE should not affect new stateless requests');
     assert.ok(postRes.body.result, 'Expected successful response from auto-created session');
+    assert.ok(postRes.headers['mcp-session-id'], 'Expected new session ID');
   }, results);
 
   // --- Rate Limiting ---

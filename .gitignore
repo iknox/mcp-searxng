@@ -38,8 +38,9 @@ logs
 .DS_Store
 Thumbs.db
 
-# Claude
+# Claude / AI agent memory
 .claude
+.memsearch
 
 # Codex
 .codex
